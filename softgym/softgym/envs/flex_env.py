@@ -225,12 +225,13 @@ class FlexEnv(gym.Env):
             img = img.reshape(height, width, 4)[::-1, :, :3]  # Need to reverse the height dimension
             return img
         elif mode == 'rgb_depth':
-            img, _ = pyflex.render()
+            img, depth = pyflex.render()
             width, height = self.camera_params['default_camera']['width'], self.camera_params['default_camera']['height']
             img = img.reshape(height, width, 4)[::-1, :, :3]  # Need to reverse the height dimension
-            _, depth = pyflex.render_cloth()
+            # _, depth = pyflex.render_cloth()
             depth = depth.reshape(height, width)[::-1]
-            depth[depth>5] = 0
+            # depth[depth>5] = 0
+            depth = depth/np.max(depth)
             return img, depth
         elif mode == 'human':
             raise NotImplementedError
