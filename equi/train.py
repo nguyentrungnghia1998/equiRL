@@ -213,12 +213,16 @@ def main(args):
     action_shape = env.action_space.shape
     if args.encoder_type == 'pixel':
         if args.env_kwargs['observation_mode'] == 'cam_rgb':
-            obs_shape = (3, args.image_size, args.image_size)
+            n = 3
         elif args.env_kwargs['observation_mode'] == 'only_depth':
-            obs_shape = (1, args.image_size, args.image_size)
+            n = 1
         else:
-            obs_shape = (4, args.image_size, args.image_size)
-        pre_aug_obs_shape = obs_shape
+            n = 4
+
+        if args.env_kwargs['use_pick_old_state']:
+            n+=args.env_kwargs['num_picker']
+        obs_shape = (n, args.image_size, args.image_size)
+        pre_aug_obs_shape = (n, args.pre_transform_image_size, args.pre_transform_image_size)
     else:
         obs_shape = env.observation_space.shape
         pre_aug_obs_shape = obs_shape
