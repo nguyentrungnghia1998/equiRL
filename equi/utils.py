@@ -473,12 +473,11 @@ def choose_random_particle_from_boundary(env):
     for simplex in hull.simplices:
         bound_id.add(simplex[0])
         bound_id.add(simplex[1])
-    bound_id = list(bound_id)
     # choose 2 random boundary id with min distance >= 6 * picker_radius
     count_choose_id = 0
     while True:
-        choosen_id = np.random.choice(bound_id, 2, replace=False)
-        if np.linalg.norm(particle_pos[choosen_id[0], [0, 2]] - particle_pos[choosen_id[1], [0, 2]]) >=  6 * env.action_tool.picker_radius:
+        choosen_id = random.sample(bound_id, 2)
+        if np.linalg.norm(particle_pos[choosen_id[0], [0, 2]] - particle_pos[choosen_id[1], [0, 2]]) >=  4 * env.action_tool.picker_radius:
             break
         if count_choose_id > 20:
             return None

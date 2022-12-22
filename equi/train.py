@@ -94,14 +94,12 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
                 if args.encoder_type == 'pixel':
                     if obs.shape[0] == 1:
                         obs = obs[0]
-                    # print(obs.shape)
                     
-                # with utils.eval_mode(agent):
-                #     if sample_stochastically:
-                #         action = agent.sample_action(obs)
-                #     else:
-                #         action = agent.select_action(obs)
-                action = np.array([1.0, 0.0, 0.0, 0.0, ])
+                with utils.eval_mode(agent):
+                    if sample_stochastically:
+                        action = agent.sample_action(obs)
+                    else:
+                        action = agent.select_action(obs)
                 obs, reward, done, info = env.step(action)
                 episode_reward += reward
                 ep_info.append(info)
@@ -167,7 +165,6 @@ def make_agent(obs_shape, action_shape, args, device):
             num_filters=args.num_filters,
             log_interval=args.log_interval,
             detach_encoder=args.detach_encoder,
-            curl_latent_dim=args.curl_latent_dim,
             num_rotations=args.num_rotations
         )
     else:
@@ -362,12 +359,8 @@ def main(args):
 
         # run training update
         if step >= args.init_steps:
-            s_u = time.time()
             agent.update(replay_buffer, L, step)
-            print(f'update time: {time.time() - s_u}')
-        s_e = time.time()
         next_obs, reward, done, info = env.step(action)
-        print(f'env step time: {time.time() - s_e}')
         # allow infinit bootstrap
         ep_info.append(info)
         done_bool = 1 if episode_step + 1 == env.horizon else float(done)

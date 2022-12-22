@@ -254,6 +254,67 @@ def main(args):
         device=device
     )
 
+    print('==================== START COLLECTING DEMONSTRATIONS ====================')
+    all_frames_planner = []
+    thresh = env.cloth_particle_radius + env.action_tool.picker_radius + env.action_tool.picker_threshold
+    count_planner = 0
+    while True:
+        obs = env.reset()
+        episode_step = 0
+        frames = [env.get_image(128, 128)]
+        while True:
+            # choose random boundary point
+            choosen_id = utils.choose_random_particle_from_boundary(env)
+            if choosen_id is None:
+                print('[INFO] Cannot find boundary point!!!')
+                break
+            # move to two choosen boundary points and pick them
+            pick_choosen = utils.pick_choosen_point(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer)
+            if pick_choosen is None:
+                count_planner += 1
+                break
+            if pick_choosen == 1:
+                # release the cloth
+                release = utils.give_up_the_cloth(env, obs, episode_step, frames, replay_buffer)
+                if release is None:
+                    count_planner += 1
+                    break
+                episode_step, obs = release[0], release[1]
+                continue
+            else:
+                episode_step, obs = pick_choosen[0], pick_choosen[1]
+            # choose fling primitive or pick&drag primitive
+            if np.random.rand() < 0.5:
+                # fling primitive
+                fling = utils.fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer)
+                if fling is None:
+                    count_planner += 1
+                    break
+                episode_step, obs = fling[0], fling[1]
+            else:
+                # pick&drag primitive
+                pick_drag = utils.pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer)
+                if pick_drag is None:
+                    count_planner += 1
+                    break
+                episode_step, obs = pick_drag[0], pick_drag[1]
+            # release the cloth
+            release = utils.give_up_the_cloth(env, obs, episode_step, frames, replay_buffer)
+            if release is None:
+                count_planner += 1
+                break
+            episode_step, obs = release[0], release[1]
+        all_frames_planner.append(frames)
+        print('[INFO]Collected {} demonstrations'.format(count_planner))
+        if count_planner == 20:
+            print('==================== FINISH COLLECTING DEMONSTRATIONS ====================')
+            break
+
+    # final_reward.append(reward)
+    all_frames_planner = np.array(all_frames_planner).swapaxes(0, 1)
+    all_frames_planner = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in all_frames_planner])
+    save_numpy_as_gif(all_frames_planner, os.path.join(video_dir, 'expert.gif'))
+
     episode, episode_reward, done, ep_info = 0, 0, True, []
     start_time = time.time()
     for step in range(args.num_train_steps):
