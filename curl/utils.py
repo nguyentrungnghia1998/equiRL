@@ -4,8 +4,9 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 import gym
 import os
-from collections import deque
 import random
+import copy
+from collections import deque
 from torch.utils.data import Dataset, DataLoader
 import time
 from skimage.util.shape import view_as_windows
@@ -14,6 +15,9 @@ from scipy.ndimage import affine_transform
 from curl.default_config import DEFAULT_CONFIG
 from matplotlib import pyplot as plt
 from PIL import Image
+from scipy.spatial import ConvexHull
+
+
 
 class ConvergenceChecker(object):
     def __init__(self, threshold, history_len):
@@ -234,23 +238,21 @@ class ReplayBufferAugmented(ReplayBuffer):
     
     def add(self, obs, action, reward, next_obs, done):
         super().add(obs, action, reward, next_obs, done)
-        os.makedirs('augmented', exist_ok=True)
-        plt.figure(figsize=(15, 15))
-        plt.subplot(self.aug_n+1, 2, 1)
-        plt.imshow(obs[0].numpy().transpose(1, 2, 0))
-        plt.subplot(self.aug_n+1, 2, 2)
-        plt.imshow(next_obs[0].numpy().transpose(1, 2, 0))
-        a = None
+        # os.makedirs('augmented', exist_ok=True)
+        # plt.figure(figsize=(15, 15))
+        # plt.subplot(self.aug_n+1, 2, 1)
+        # plt.imshow(obs[0].numpy().transpose(1, 2, 0))
+        # plt.subplot(self.aug_n+1, 2, 2)
+        # plt.imshow(next_obs[0].numpy().transpose(1, 2, 0))
         for i in range(self.aug_n):
             obs_, action_, reward_, next_obs_, done_ = augmentTransition(obs, action, reward, next_obs, done, DEFAULT_CONFIG['aug_type'])
-            plt.subplot(self.aug_n+1, 2, 2*i+3)
-            plt.imshow(obs_[0].numpy().transpose(1, 2, 0))
-            plt.subplot(self.aug_n+1, 2, 2*i+4)
-            plt.imshow(next_obs_[0].numpy().transpose(1, 2, 0))
+            # plt.subplot(self.aug_n+1, 2, 2*i+3)
+            # plt.imshow(obs_[0].numpy().transpose(1, 2, 0))
+            # plt.subplot(self.aug_n+1, 2, 2*i+4)
+            # plt.imshow(next_obs_[0].numpy().transpose(1, 2, 0))
             super().add(obs_, action_, reward_, next_obs_, done_)
-            a = action_
-        plt.title(f'{action}---{a}')
-        plt.savefig(f'augmented/{self.idx}.png')
+        # plt.savefig(f'augmented/{self.idx}.png')
+        # exit()
 
 def augmentTransition(obs, action, reward, next_obs, done, aug_type):
     if aug_type=='se2':
@@ -324,7 +326,6 @@ def augmentTransitionShift(obs, action, reward, next_obs, done):
 
 def perturb(current_image, next_image, dxy1, dxy2, set_theta_zero=False, set_trans_zero=False):
     image_size = current_image.shape[-2:]
-    
     # Compute random rigid transform.
     theta, trans, pivot = get_random_image_transform_params(image_size)
     if set_theta_zero:
@@ -443,3 +444,305 @@ def center_crop_image(image, output_size):
     image = image[:, top:top + new_h, left:left + new_w]
     # print('output image shape:', image.shape)
     return image
+
+def preprocess_action(action):
+    dxy = action[:, ::2]
+    dxy1 = dxy[:, :2]
+    dxy1[:, 0] = torch.where(dxy1[:, 0] != 0, dxy1[:, 0], 1e-9)
+    dxy2 = dxy[:, 2:]
+    dz = torch.cat([action[:, 1:2], action[:, 5:6]], dim=1)
+    p = action[:, 3:4]
+    m = dxy2[:, 0] / dxy1[:, 0]
+    m = torch.clamp(m, -1.0, 1.0).view(-1, 1)
+    new_action = torch.cat([dxy[:, :2], dz, p, m], dim=1)
+    return new_action
+
+def posprocess_action(action):
+    dxy1 = action[:, :2]
+    dz = action[:, 2:4]
+    p = action[:, 4:5]
+    m = action[:, 5:6]
+    dxy2 = dxy1 * m
+    new_action = torch.cat([dxy1[:, 0:1], dz[:, 0:1], dxy1[:, 1:], p,  dxy2[:, 0:1], dz[:, 1:], dxy2[:, 1:], p], dim=1)
+    return new_action
+
+def choose_random_particle_from_boundary(env):
+    picker_pos, particle_pos = env.action_tool._get_pos()
+    hull = ConvexHull(particle_pos[:, [0, 2]])
+    bound_id = set()
+    for simplex in hull.simplices:
+        bound_id.add(simplex[0])
+        bound_id.add(simplex[1])
+    # choose 2 random boundary id with min distance >= 6 * picker_radius
+    count_choose_id = 0
+    while True:
+        choosen_id = random.sample(bound_id, 2)
+        if np.linalg.norm(particle_pos[choosen_id[0], [0, 2]] - particle_pos[choosen_id[1], [0, 2]]) >=  6 * env.action_tool.picker_radius:
+            break
+        if count_choose_id > 20:
+            return None
+    # find the closest points for picker
+    if np.linalg.norm(particle_pos[choosen_id[0], :3] - picker_pos[0]) > np.linalg.norm(particle_pos[choosen_id[1], :3] - picker_pos[0]):
+        return np.array([choosen_id[1], choosen_id[0]])
+    return choosen_id
+
+def pick_choosen_point(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer, max_step=10):
+    count_pick_bound = 0
+    while True:
+        picker_pos, particle_pos = env.action_tool._get_pos()
+        target_pos = particle_pos[choosen_id, :3]
+        dis = target_pos - picker_pos
+        norm = np.linalg.norm(dis, axis=1)
+        action = np.clip(dis, -0.08, 0.08) / 0.08
+        if norm[0] <= thresh and norm[1] <= thresh:
+            action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
+        else:
+            action = np.concatenate([action, np.zeros((2, 1))], axis=1).reshape(-1)
+        next_obs, reward, done, info = env.step(action)
+        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
+        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        frames.append(env.get_image(128, 128))
+        obs = next_obs
+        episode_step += 1
+        count_pick_bound += 1
+        if done_bool == 1:
+            return None
+        if count_pick_bound >= max_step:
+            return 1
+        if all(i != None for i in env.action_tool.picked_particles) and len(set(particle_pos[env.action_tool.picked_particles, 3])) == 1:
+            return [episode_step, obs]
+
+def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer, max_step=10):
+    # fling primitive
+    # first, move to the cloth up to the ground
+    count_move_height = 0
+    while True:
+        action = np.array([0, 1, 0, 1, 0, 1, 0, 1])
+        next_obs, reward, done, info = env.step(action)
+        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
+        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        frames.append(env.get_image(128, 128))
+        episode_step += 1
+        obs = next_obs
+        count_move_height += 1
+        if done_bool == 1:
+            return None
+        if (env.action_tool._get_pos()[1][:, 1] >= 2*env.cloth_particle_radius).all() or count_move_height >= max_step:
+            break
+
+    count_move_height_back = 0
+    while True:
+        if (env.action_tool._get_pos()[1][:, 1] <= 2*env.cloth_particle_radius).any():
+            break
+        action = np.array([0, -0.2, 0, 1, 0, -0.2, 0, 1])
+        next_obs, reward, done, info = env.step(action)
+        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
+        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        frames.append(env.get_image(128, 128))
+        episode_step += 1
+        obs = next_obs
+        count_move_height_back += 1
+        if done_bool == 1:
+            return None
+
+    # second, stretch the cloth
+    curr_pos = env.action_tool._get_pos()[0]
+    init_pos = env._get_flat_pos()
+    init_dis = np.linalg.norm(init_pos[choosen_id[0], [0, 2]] - init_pos[choosen_id[1], [0, 2]])
+    curr_dis = np.linalg.norm(curr_pos[0, [0, 2]] - curr_pos[1, [0, 2]])
+    denta = (init_dis-curr_dis) / 2
+    if curr_pos[0, 0] > curr_pos[1, 0]:
+        left = 1
+        right = 0
+    else:
+        left = 0
+        right = 1
+    cos_phi = (curr_pos[right, 0] - curr_pos[left, 0]) / curr_dis
+    sin_phi = (curr_pos[right, 2] - curr_pos[left, 2]) / curr_dis
+    target_pos = copy.deepcopy(curr_pos)
+    target_pos[left, 0] = curr_pos[left, 0] - denta * cos_phi
+    target_pos[left, 2] = curr_pos[left, 2] - denta * sin_phi
+    target_pos[right, 0] = curr_pos[right, 0] + denta * cos_phi
+    target_pos[right, 2] = curr_pos[right, 2] + denta * sin_phi
+    count_stretch = 0
+    while True:
+        picker_pos = env.action_tool._get_pos()[0]
+        dis = target_pos - picker_pos
+        norm = np.linalg.norm(dis, axis=1)
+        action = np.clip(dis, -0.08, 0.08) / 0.08
+        action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
+        next_obs, reward, done, info = env.step(action)
+        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
+        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        frames.append(env.get_image(128, 128))
+        episode_step += 1
+        obs = next_obs
+        count_stretch += 1
+        if done_bool == 1:
+            return None
+        if (norm <= thresh).all() or count_stretch >= max_step:
+            break
+    # third, fling the cloth towards
+    curr_pos = env.action_tool._get_pos()[0]
+    if curr_pos[0, 0] > curr_pos[1, 0]:
+        left = 1
+        right = 0
+    else:
+        left = 0
+        right = 1
+    denta_x = curr_pos[right, 0] - curr_pos[left, 0]
+    denta_y = curr_pos[right, 2] - curr_pos[left, 2]
+    k = - denta_y / denta_x
+    dy = 1 / np.sqrt(1 + k**2)
+    dx = k / np.sqrt(1 + k**2)
+    for i in range(8):
+        m = np.exp(-i)
+        action = np.array([dx*m, m, dy*m, 1.0, dx*m, m, dy*m, 1.0])
+        next_obs, reward, done, info = env.step(action)
+        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
+        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        frames.append(env.get_image(128, 128))
+        episode_step += 1
+        obs = next_obs
+        if done_bool == 1:
+            return None
+    # fourth, move back the cloth to the ground
+    for i in range(20):
+        if (env.action_tool._get_pos()[0][:, 1] <= thresh).all():
+            break
+        m = np.exp(-i/20)
+        action = np.array([-dx*m, -m, -dy*m, 1.0, -dx*m, -m, -dy*m, 1.0])
+        next_obs, reward, done, info = env.step(action)
+        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
+        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        frames.append(env.get_image(128, 128))
+        episode_step += 1
+        obs = next_obs
+        if done_bool == 1:
+            return None
+    return [episode_step, obs]
+
+def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer, max_step=10):
+    # move to picker to the height 0.1
+    curr_pos = env.action_tool._get_pos()[0]
+    curr_pos[:, 1] = 0.1
+    while True:
+        picker_pos = env.action_tool._get_pos()[0]
+        dis = curr_pos - picker_pos
+        norm = np.linalg.norm(dis, axis=1)
+        action = np.clip(dis, -0.08, 0.08) / 0.08
+        action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
+        next_obs, reward, done, info = env.step(action)
+        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
+        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        frames.append(env.get_image(128, 128))
+        episode_step += 1
+        obs = next_obs
+        if done_bool == 1:
+            return None
+        if (norm <= thresh).all():
+            break
+    # stretch the cloth
+    curr_pos = env.action_tool._get_pos()[0]
+    init_pos = env._get_flat_pos()
+    init_dis = np.linalg.norm(init_pos[choosen_id[0], [0, 2]] - init_pos[choosen_id[1], [0, 2]])
+    curr_dis = np.linalg.norm(curr_pos[0, [0, 2]] - curr_pos[1, [0, 2]])
+    denta = (init_dis-curr_dis) / 2
+    if curr_pos[0, 0] > curr_pos[1, 0]:
+        left = 1
+        right = 0
+    else:
+        left = 0
+        right = 1
+    cos_phi = (curr_pos[right, 0] - curr_pos[left, 0]) / curr_dis
+    sin_phi = (curr_pos[right, 2] - curr_pos[left, 2]) / curr_dis
+    target_pos = copy.deepcopy(curr_pos)
+    target_pos[left, 0] = curr_pos[left, 0] - denta * cos_phi
+    target_pos[left, 2] = curr_pos[left, 2] - denta * sin_phi
+    target_pos[right, 0] = curr_pos[right, 0] + denta * cos_phi
+    target_pos[right, 2] = curr_pos[right, 2] + denta * sin_phi
+    count_stretch = 0
+    while True:
+        picker_pos = env.action_tool._get_pos()[0]
+        dis = target_pos - picker_pos
+        norm = np.linalg.norm(dis, axis=1)
+        action = np.clip(dis, -0.08, 0.08) / 0.08
+        action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
+        next_obs, reward, done, info = env.step(action)
+        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
+        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        frames.append(env.get_image(128, 128))
+        episode_step += 1
+        obs = next_obs
+        count_stretch += 1
+        if done_bool == 1:
+            return None
+        if (norm < thresh).all() or count_stretch >= max_step:
+            break
+    # drag the cloth to the opposite side
+    curr_pos, particle_pos = env.action_tool._get_pos()
+    if curr_pos[0, 0] > curr_pos[1, 0]:
+        left = 1
+        right = 0
+    else:
+        left = 0
+        right = 1
+    denta_x = curr_pos[right, 0] - curr_pos[left, 0]
+    denta_y = curr_pos[right, 2] - curr_pos[left, 2]
+    k = - denta_y / denta_x
+    dy = 1 / np.sqrt(1 + k**2)
+    dx = k / np.sqrt(1 + k**2)
+    particle_mean = np.mean(particle_pos[:, :3], axis=0)
+    if k*(particle_mean[0] - curr_pos[right, 0]) + (particle_mean[2]-curr_pos[right, 2]) >= 0:
+        dx = -dx
+        dy = -dy
+    for i in range(8):
+        m = np.exp(-i/8)
+        # m = 1
+        action = np.array([dx*m, 0, dy*m, 1.0, dx*m, 0, dy*m, 1.0])
+        next_obs, reward, done, info = env.step(action)
+        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
+        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        frames.append(env.get_image(128, 128))
+        episode_step += 1
+        obs = next_obs
+        if done_bool == 1:
+            return None
+    # move the picker down
+    while True:
+        if (env.action_tool._get_pos()[0][:, 1] <= thresh).all():
+            break
+        action = np.array([0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 0.0, 1.0])
+        next_obs, reward, done, info = env.step(action)
+        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
+        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        frames.append(env.get_image(128, 128))
+        episode_step += 1
+        obs = next_obs
+        if done_bool == 1:
+            return None
+    return [episode_step, obs]
+
+def give_up_the_cloth(env, obs, episode_step, frames, replay_buffer):
+    action = np.zeros(8)
+    next_obs, reward, done, info = env.step(action)
+    done_bool = 1 if episode_step + 1 == env.horizon else float(done)
+    replay_buffer.add(obs, action, reward, next_obs, done_bool)
+    frames.append(env.get_image(128, 128))
+    episode_step += 1
+    obs = next_obs
+    if done_bool == 1:
+        return None
+    
+    # move the picker up
+    for _ in range(2):
+        action = np.array([0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+        next_obs, reward, done, info = env.step(action)
+        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
+        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        frames.append(env.get_image(128, 128))
+        episode_step += 1
+        obs = next_obs
+        if done_bool == 1:
+            return None
+    return [episode_step, obs]

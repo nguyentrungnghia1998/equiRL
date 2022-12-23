@@ -56,6 +56,6 @@ DEFAULT_CONFIG = {
     # equivariant
     'num_rotations': 8,
     # wandb
-    'wandb': False,
-    'wandb_seed': 7
+    'wandb': True,
+    'wandb_seed': 8
 }
