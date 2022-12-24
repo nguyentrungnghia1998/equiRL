@@ -8,10 +8,11 @@ from copy import deepcopy
 
 
 class ClothEnv(FlexEnv):
-    def __init__(self, observation_mode, action_mode, num_picker=2, render_mode='particle', picker_radius=0.05, picker_threshold=0.005, particle_radius=0.00625, **kwargs):
+    def __init__(self, observation_mode, action_mode, num_picker=2, render_mode='particle', picker_radius=0.025, picker_threshold=0.005, particle_radius=0.00625, use_pick_old_state = False, **kwargs):
         self.render_mode = render_mode
         self.action_mode = action_mode
         self.cloth_particle_radius = particle_radius
+        self.use_pick_old_state = use_pick_old_state
         super().__init__(**kwargs)
 
         assert observation_mode in ['key_point', 'point_cloud', 'cam_rgb', 'img_depth', 'only_depth']
@@ -116,12 +117,18 @@ class ClothEnv(FlexEnv):
 
     def _get_obs(self):
         if self.observation_mode == 'cam_rgb':
-            return self.get_image(self.camera_height, self.camera_width)
+            output = self.get_image(self.camera_height, self.camera_width)
         if self.observation_mode == 'img_depth':
-            return self.get_image_with_depth(self.camera_height, self.camera_width)
+            output = self.get_image_with_depth(self.camera_height, self.camera_width)
         if self.observation_mode == 'only_depth':
-            return self.get_image_with_depth(self.camera_height, self.camera_width, get_image=False)
-            
+            output = self.get_image_with_depth(self.camera_height, self.camera_width, get_image=False)
+        if self.observation_mode in ['cam_rgb','img_depth','only_depth']:
+            if self.use_pick_old_state:
+                picked = [0 if item is None else 255 for item in self.action_tool.picked_particles]
+                picked = np.tile(picked,(self.camera_height,self.camera_width,1))
+                return np.concatenate((output, picked.astype(np.uint8)), axis=2) 
+            else:
+                return output
         if self.observation_mode == 'point_cloud':
             particle_pos = np.array(pyflex.get_positions()).reshape([-1, 4])[:, :3].flatten()
             pos = np.zeros(shape=self.particle_obs_dim, dtype=np.float)
