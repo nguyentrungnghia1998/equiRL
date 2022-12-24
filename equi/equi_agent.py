@@ -13,32 +13,10 @@ import wandb
 
 LOG_FREQ = 10000
 
-def get_optimizer_stats(optim):
-    state_dict = optim.state_dict()['state']
-    if len(state_dict) ==0:
-        flattened_exp_avg = flattened_exp_avg_sq = 0.
-        print('Warning: optimizer dict is empty!')
-    else:
-        # flattened_exp_avg = flattened_exp_avg_sq = 0.
-        flattened_exp_avg = torch.cat([x['exp_avg'].flatten() for x in state_dict.values()]).cpu().numpy()
-        flattened_exp_avg_sq = torch.cat([x['exp_avg_sq'].flatten() for x in state_dict.values()]).cpu().numpy()
-    return {
-        'exp_avg_mean': np.mean(flattened_exp_avg),
-        'exp_avg_std': np.std(flattened_exp_avg),
-        'exp_avg_min': np.min(flattened_exp_avg),
-        'exp_avg_max': np.max(flattened_exp_avg),
-        'exp_avg_sq_mean': np.mean(flattened_exp_avg_sq),
-        'exp_avg_sq_std': np.std(flattened_exp_avg_sq),
-        'exp_avg_sq_min': np.min(flattened_exp_avg_sq),
-        'exp_avg_sq_max': np.max(flattened_exp_avg_sq),
-    }
-
-
 def gaussian_logprob(noise, log_std):
     """Compute Gaussian log probability."""
     residual = (-0.5 * noise.pow(2) - log_std).sum(-1, keepdim=True)
     return residual - 0.5 * np.log(2 * np.pi) * noise.size(-1)
-
 
 def squash(mu, pi, log_pi):
     """Apply squashing function.
@@ -50,121 +28,6 @@ def squash(mu, pi, log_pi):
     if log_pi is not None:
         log_pi -= torch.log(F.relu(1 - pi.pow(2)) + 1e-6).sum(-1, keepdim=True)
     return mu, pi, log_pi
-
-
-def weight_init(m):
-    """Custom weight init for Conv2D and Linear layers."""
-    if isinstance(m, nn.Linear):
-        nn.init.orthogonal_(m.weight.data)
-        m.bias.data.fill_(0.0)
-    elif isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
-        # delta-orthogonal init from https://arxiv.org/pdf/1806.05393.pdf
-        assert m.weight.size(2) == m.weight.size(3)
-        m.weight.data.fill_(0.0)
-        m.bias.data.fill_(0.0)
-        mid = m.weight.size(2) // 2
-        gain = nn.init.calculate_gain('relu')
-        nn.init.orthogonal_(m.weight.data[:, :, mid, mid], gain)
-
-
-class Actor(nn.Module):
-    """MLP actor network."""
-    def __init__(
-      self, obs_shape, action_shape, hidden_dim, encoder_type,
-      encoder_feature_dim, log_std_min, log_std_max, num_layers, num_filters
-    ):
-        
-        super().__init__()
-
-        assert encoder_type == 'pixel'
-        self.encoder = make_encoder(
-            encoder_type, obs_shape, encoder_feature_dim, num_layers,
-            num_filters, output_logits=True
-        )
-
-        self.log_std_min = log_std_min
-        self.log_std_max = log_std_max
-
-        self.trunk = nn.Sequential(
-            nn.Linear(self.encoder.feature_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, 2 * action_shape[0])
-        )
-
-        self.outputs = dict()
-        self.apply(weight_init)
-
-    def forward(
-      self, obs, compute_pi=True, compute_log_pi=True, detach_encoder=False
-    ):
-        obs = self.encoder(obs, detach=detach_encoder)
-        mu, log_std = self.trunk(obs).chunk(2, dim=-1)
-
-        # constrain log_std inside [log_std_min, log_std_max]
-        log_std = torch.tanh(log_std)
-        log_std = self.log_std_min + 0.5 * (
-          self.log_std_max - self.log_std_min
-        ) * (log_std + 1)
-
-        self.outputs['mu'] = mu
-        self.outputs['std'] = log_std.exp()
-
-        if compute_pi:
-            std = log_std.exp()
-            noise = torch.randn_like(mu)
-            pi = mu + noise * std
-        else:
-            pi = None
-            entropy = None
-
-        if compute_log_pi:
-            log_pi = gaussian_logprob(noise, log_std)
-        else:
-            log_pi = None
-
-        mu, pi, log_pi = squash(mu, pi, log_pi)
-
-        return mu, pi, log_pi, log_std
-
-    def forward_from_feature(self, obs, compute_pi=False, compute_log_pi=False):
-        mu, log_std = self.trunk(obs).chunk(2, dim=-1)
-
-        # constrain log_std inside [log_std_min, log_std_max]
-        log_std = torch.tanh(log_std)
-        log_std = self.log_std_min + 0.5 * (
-          self.log_std_max - self.log_std_min
-        ) * (log_std + 1)
-
-        self.outputs['mu'] = mu
-        self.outputs['std'] = log_std.exp()
-
-        if compute_pi:
-            std = log_std.exp()
-            noise = torch.randn_like(mu)
-            pi = mu + noise * std
-        else:
-            pi = None
-            entropy = None
-
-        if compute_log_pi:
-            log_pi = gaussian_logprob(noise, log_std)
-        else:
-            log_pi = None
-
-        mu, pi, log_pi = squash(mu, pi, log_pi)
-
-        return mu, log_std
-
-    def log(self, L, step, log_freq=LOG_FREQ):
-        if step % log_freq != 0:
-            return
-
-        for k, v in self.outputs.items():
-            L.log_histogram('train_actor/%s_hist' % k, v, step)
-
-        L.log_param('train_actor/fc1', self.trunk[0], step)
-        L.log_param('train_actor/fc2', self.trunk[2], step)
-        L.log_param('train_actor/fc3', self.trunk[4], step)
 
 class ActorEquivariant(nn.Module):
     """Equivariant actor network."""
@@ -225,88 +88,69 @@ class ActorEquivariant(nn.Module):
 
         return mean, pi, log_pi, log_std
 
-class QFunction(nn.Module):
-    def __init__(self, obs_dim, action_dim, hidden_dim):
-        super().__init__()
-        self.trunk = nn.Sequential(
-            nn.Linear(obs_dim + action_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
-        )
-
-    def forward(self, obs, action):
-        if obs.size(0) != action.size(0):
-            print(obs.size)
-            print(action.size)
-        assert obs.size(0) == action.size(0)
-
-        obs_action = torch.cat([obs, action], dim=1)
-        return self.trunk(obs_action)
-
-class Critic(nn.Module):
-    """Critic network, employes two q-functions."""
-
-    def __init__(
-      self, obs_shape, action_shape, hidden_dim, encoder_type,
-      encoder_feature_dim, num_layers, num_filters
-    ):
+class ActorEquivariant_1(nn.Module):
+    """Equivariant actor network with picker state."""
+    def __init__(self, obs_shape, action_shape, hidden_dim, encoder_type,
+                 encoder_feature_dim, log_std_min, log_std_max, num_layers,
+                 num_filters, N):
         super().__init__()
 
-        self.encoder1 = make_encoder(
-            encoder_type, obs_shape, encoder_feature_dim, num_layers,
-            num_filters, output_logits=True
+        print(f'===================================== Equivariant Actor for picker state with C{N}=====================================')
+
+        assert encoder_feature_dim == hidden_dim
+        self.act = gspaces.rot2dOnR2(N)
+
+        self.action_shape = action_shape
+        self.obs_shape = obs_shape
+        self.log_std_min = log_std_min
+        self.log_std_max = log_std_max
+        self.hidden_dim = hidden_dim
+
+        self.encoder = make_encoder(
+            encoder_type, obs_shape, encoder_feature_dim, num_layers, num_filters, output_logits=False, N=N
         )
 
-        self.encoder2 = make_encoder(
-            encoder_type, obs_shape, encoder_feature_dim, num_layers,
-            num_filters, output_logits=True
+        self.conv = nn.Sequential(
+            escnn.nn.R2Conv(escnn.nn.FieldType(self.act, hidden_dim*[self.act.regular_repr] + 2*[self.act.trivial_repr]),
+                            escnn.nn.FieldType(self.act, 2*[self.act.irrep(1)] + (self.action_shape[0]*2 -4)*[self.act.trivial_repr]), 
+                            kernel_size=1, padding=0, initialize=True)
         )
 
-        self.Q1 = QFunction(
-            self.encoder1.feature_dim, action_shape[0], hidden_dim
-        )
-        self.Q2 = QFunction(
-            self.encoder2.feature_dim, action_shape[0], hidden_dim
-        )
+    def forward(self, obs, picker_state, compute_pi=True, compute_log_pi=True, detach_encoder=False):
+        obs = obs / 255.0
+        obs_geo = escnn.nn.GeometricTensor(obs, escnn.nn.FieldType(self.act, self.obs_shape[0]*[self.act.trivial_repr]))
+        conv_out = self.encoder(obs_geo, detach_encoder).tensor
+        picker_state = picker_state.reshape(-1, 2, 1, 1)
+        obs_cat = torch.cat((conv_out, picker_state), dim=1)
+        obs_cat_geo = escnn.nn.GeometricTensor(obs_cat, escnn.nn.FieldType(self.act, self.hidden_dim*[self.act.regular_repr] + 2*[self.act.trivial_repr]))
+        conv_out = self.conv(obs_cat_geo).tensor.reshape(obs.shape[0], -1)
+        dxy = conv_out[:, :4]
+        inv_act = conv_out[:, 4:self.action_shape[0]]
+        mean = torch.cat((dxy[:, 0:1], inv_act[:, 0:1], dxy[:, 1:2], inv_act[:, 1:2], dxy[:, 2:3], inv_act[:, 2:3], dxy[:, 3:4], inv_act[:, 3:4]), dim=1)
+        log_std = conv_out[:, self.action_shape[0]:]
 
-        self.outputs = dict()
-        self.apply(weight_init)
+        # constrain log_std inside [log_std_min, log_std_max]
+        log_std = torch.tanh(log_std)
+        log_std = self.log_std_min + 0.5 * (
+          self.log_std_max - self.log_std_min
+        ) * (log_std + 1)
 
-    def forward(self, obs, action, detach_encoder=False):
-        # detach_encoder allows to stop gradient propogation to encoder
-        obs1 = self.encoder1(obs, detach=detach_encoder)
-        obs2 = self.encoder2(obs, detach=detach_encoder)
-        q1 = self.Q1(obs1, action)
-        q2 = self.Q2(obs2, action)
+        if compute_pi:
+            std = log_std.exp()
+            noise = torch.randn_like(mean)
+            pi = mean + noise * std
+        else:
+            pi = None
+            entropy = None
 
-        self.outputs['q1'] = q1
-        self.outputs['q2'] = q2
+        if compute_log_pi:
+            log_pi = gaussian_logprob(noise, log_std)
+        else:
+            log_pi = None
 
-        return q1, q2
+        mean, pi, log_pi = squash(mean, pi, log_pi)
 
-    def forward_from_feature(self, feature, action):
-        # detach_encoder allows to stop gradient propogation to encoder
-        q1 = self.Q1(feature, action)
-        q2 = self.Q2(feature, action)
-
-        self.outputs['q1'] = q1
-        self.outputs['q2'] = q2
-
-        return q1, q2
-
-    def log(self, L, step, log_freq=LOG_FREQ):
-        if step % log_freq != 0:
-            return
-
-        self.encoder1.log(L, step, log_freq)
-        self.encoder2.log(L, step, log_freq)
-
-        for k, v in self.outputs.items():
-            L.log_histogram('train_critic/%s_hist' % k, v, step)
-
-        for i in range(3):
-            L.log_param('train_critic/q1_fc%d' % i, self.Q1.trunk[i * 2], step)
-            L.log_param('train_critic/q2_fc%d' % i, self.Q2.trunk[i * 2], step)
+        return mean, pi, log_pi, log_std
 
 class CriticEquivariant(nn.Module):
     """Equivariant critic network, employes two q-functions."""
@@ -364,6 +208,63 @@ class CriticEquivariant(nn.Module):
         q2 = self.Q2(cat_geo).tensor.reshape(batch_size, 1)
         return q1, q2
 
+class CriticEquivariant_1(nn.Module):
+    """Equivariant Critic network, employes two q-functions with picker state."""
+    def __init__(
+      self, obs_shape, action_shape, hidden_dim, encoder_type,
+      encoder_feature_dim, num_layers, num_filters, N
+    ):
+        super().__init__()
+        assert hidden_dim == encoder_feature_dim
+        print(f'===================================== Equivariant Critic for picker state with C{N} =====================================')
+
+        self.encoder = make_encoder(
+            encoder_type, obs_shape, encoder_feature_dim, num_layers,
+            num_filters, output_logits=False, N=N
+        )
+    
+        self.act = gspaces.rot2dOnR2(N)
+        self.action_shape = action_shape
+        self.obs_shape = obs_shape
+        self.hidden_dim = hidden_dim
+
+        self.Q1 = nn.Sequential(
+            escnn.nn.R2Conv(escnn.nn.FieldType(self.act, hidden_dim*[self.act.regular_repr] + 2*[self.act.trivial_repr] + (self.action_shape[0] - 4)*[self.act.trivial_repr] + 2*[self.act.irrep(1)]),
+                            escnn.nn.FieldType(self.act, hidden_dim*[self.act.regular_repr]), 
+                            kernel_size=1, padding=0, initialize=True),
+            escnn.nn.ReLU(escnn.nn.FieldType(self.act, hidden_dim*[self.act.regular_repr]), inplace=True),
+            escnn.nn.GroupPooling(escnn.nn.FieldType(self.act, hidden_dim*[self.act.regular_repr])),
+            escnn.nn.R2Conv(escnn.nn.FieldType(self.act, hidden_dim*[self.act.trivial_repr]),
+                            escnn.nn.FieldType(self.act, 1*[self.act.trivial_repr]), 
+                            kernel_size=1, padding=0, initialize=True),
+        )
+
+        self.Q2 = nn.Sequential(
+            escnn.nn.R2Conv(escnn.nn.FieldType(self.act, hidden_dim*[self.act.regular_repr] + 2*[self.act.trivial_repr] + (self.action_shape[0] - 4)*[self.act.trivial_repr] + 2*[self.act.irrep(1)]),
+                            escnn.nn.FieldType(self.act, hidden_dim*[self.act.regular_repr]), 
+                            kernel_size=1, padding=0, initialize=True),
+            escnn.nn.ReLU(escnn.nn.FieldType(self.act, hidden_dim*[self.act.regular_repr]), inplace=True),
+            escnn.nn.GroupPooling(escnn.nn.FieldType(self.act, hidden_dim*[self.act.regular_repr])),
+            escnn.nn.R2Conv(escnn.nn.FieldType(self.act, hidden_dim*[self.act.trivial_repr]),
+                            escnn.nn.FieldType(self.act, 1*[self.act.trivial_repr]), 
+                            kernel_size=1, padding=0, initialize=True),
+        )
+
+    def forward(self, obs, picker_state, action, detach_encoder=False):
+        obs = obs / 255.0
+        batch_size = obs.shape[0]
+        action = action.reshape(batch_size, -1)
+        obs_geo = escnn.nn.GeometricTensor(obs, escnn.nn.FieldType(self.act, self.obs_shape[0]*[self.act.trivial_repr]))
+        conv_out = self.encoder(obs_geo, detach=detach_encoder)
+        picker_state = picker_state.reshape(batch_size, 2, 1, 1) 
+        dxy = torch.cat([action[:, 0:1], action[:, 2:3], action[:, 4:5], action[:, 6:7]], dim=1).reshape(batch_size, 4, 1, 1)
+        inv_act = torch.cat([action[:, 1:2], action[:, 3:4], action[:, 5:6], action[:, 7:8]], dim=1).reshape(batch_size, 4, 1, 1)
+        cat = torch.cat((conv_out.tensor, picker_state, inv_act, dxy), dim=1)
+        cat_geo = escnn.nn.GeometricTensor(cat, escnn.nn.FieldType(self.act, self.hidden_dim *[self.act.regular_repr] + 2*[self.act.trivial_repr] + (self.action_shape[0] - 4)*[self.act.trivial_repr] + 2*[self.act.irrep(1)]))
+        q1 = self.Q1(cat_geo).tensor.reshape(batch_size, 1)
+        q2 = self.Q2(cat_geo).tensor.reshape(batch_size, 1)
+        return q1, q2
+
 class SacAgent(object):
     def __init__(
       self,
@@ -417,16 +318,26 @@ class SacAgent(object):
             obs_shape, action_shape, hidden_dim, 'pixel-equivariant',
             encoder_feature_dim, actor_log_std_min, actor_log_std_max,
             num_layers, num_filters, num_rotations).to(device)
+        # self.actor = ActorEquivariant_1(
+        #     obs_shape, action_shape, hidden_dim, 'pixel-equivariant',
+        #     encoder_feature_dim, actor_log_std_min, actor_log_std_max,
+        #     num_layers, num_filters, num_rotations).to(device)
 
         # build equivariant critic model
         self.critic = CriticEquivariant(
             obs_shape, action_shape, hidden_dim, 'pixel-equivariant',
             encoder_feature_dim, num_layers, num_filters, num_rotations).to(device)
-
+        # self.critic = CriticEquivariant_1(
+        #     obs_shape, action_shape, hidden_dim, 'pixel-equivariant',
+        #     encoder_feature_dim, num_layers, num_filters, num_rotations).to(device)
         # build equivariant target critic model
         self.critic_target = CriticEquivariant(
             obs_shape, action_shape, hidden_dim, 'pixel-equivariant',
             encoder_feature_dim, num_layers, num_filters, num_rotations).to(device)
+        # self.critic_target = CriticEquivariant_1(
+        #     obs_shape, action_shape, hidden_dim, 'pixel-equivariant',
+        #     encoder_feature_dim, num_layers, num_filters, num_rotations).to(device)
+
 
         # copy critic parameters to critic target
         self.critic_target.load_state_dict(self.critic.state_dict())
@@ -468,6 +379,19 @@ class SacAgent(object):
     @property
     def alpha(self):
         return self.log_alpha.exp()
+    # def select_action(self, obs, picker_state):
+        # with torch.no_grad():
+            # if not isinstance(obs, torch.Tensor):
+                # obs = torch.from_numpy(obs)
+            # obs = obs.to(torch.float32).to(self.device)
+            # obs = obs.unsqueeze(0)
+            # if not isinstance(picker_state, torch.Tensor):
+                # picker_state = torch.from_numpy(picker_state)
+            # picker_state = picker_state.to(torch.float32).to(self.device)
+            # picker_state = picker_state.unsqueeze(0)
+# 
+            # mu, _, _, _ = self.actor(obs, picker_state, compute_pi=False, compute_log_pi=False)
+            # return mu.cpu().data.numpy().flatten()
 
     def select_action(self, obs):
         with torch.no_grad():
@@ -477,6 +401,25 @@ class SacAgent(object):
             obs = obs.unsqueeze(0)
             mu, _, _, _ = self.actor(obs, compute_pi=False, compute_log_pi=False)
             return mu.cpu().data.numpy().flatten()
+
+    # def sample_action(self, obs, picker_state):
+        # if obs.shape[0] == 1:
+            # obs = obs[0]
+        # if picker_state.shape[0] == 1:
+            # picker_state = picker_state[0]
+# 
+        # with torch.no_grad():
+            # if not isinstance(obs, torch.Tensor):
+                # obs = torch.from_numpy(obs)
+            # obs = obs.to(torch.float32).to(self.device)
+            # obs = obs.unsqueeze(0)
+            # if not isinstance(picker_state, torch.Tensor):
+                # picker_state = torch.from_numpy(picker_state)
+            # picker_state = picker_state.to(torch.float32).to(self.device)
+            # picker_state = picker_state.unsqueeze(0)
+# 
+            # _, pi, _, _ = self.actor(obs, picker_state, compute_log_pi=False)
+            # return pi.cpu().data.numpy().flatten()
 
     def sample_action(self, obs):     
         if obs.shape[0] == 1:
@@ -514,7 +457,30 @@ class SacAgent(object):
             self.critic_lr_scheduler.step()
             L.log('train/critic_lr', self.critic_optimizer.param_groups[0]['lr'], step)
 
-        # self.critic.log(L, step)
+    # def update_critic(self, obs, action, reward, next_obs, not_done, picker_state, next_picker_state, L, step):
+        # with torch.no_grad():
+            # _, policy_action, log_pi, _ = self.actor(next_obs, next_picker_state)
+            # target_Q1, target_Q2 = self.critic_target(next_obs, next_picker_state, policy_action)
+            # target_V = torch.min(target_Q1, target_Q2) - self.alpha.detach() * log_pi
+            # target_Q = reward + (not_done * self.discount * target_V)
+# 
+        # get current Q estimates
+        # current_Q1, current_Q2 = self.critic(obs, picker_state, action, detach_encoder=self.detach_encoder)
+        # critic_loss = F.mse_loss(current_Q1,target_Q) + F.mse_loss(current_Q2, target_Q)
+        # if step % self.log_interval == 0:
+            # L.log('train_critic/loss', critic_loss, step)
+            # if self.args.wandb:
+                # wandb.log({'train_critic_loss': critic_loss}, step=step)
+# 
+        # Optimize the critic
+        # self.critic_optimizer.zero_grad()
+        # critic_loss.backward()
+        # self.critic_optimizer.step()
+# 
+        # if self.args.lr_decay is not None:
+            # self.critic_lr_scheduler.step()
+            # L.log('train/critic_lr', self.critic_optimizer.param_groups[0]['lr'], step)
+# 
 
     def update_actor_and_alpha(self, obs, L, step):
         # detach encoder, so we don't update it with the actor loss
@@ -548,15 +514,47 @@ class SacAgent(object):
                 if self.args.wandb:
                     wandb.log({'train_alpha_loss': alpha_loss}, step=step)
                     wandb.log({'train_alpha_value': self.alpha}, step=step)
-                    wandb.log({'-log pi': -log_pi.mean()}, step=step)
             alpha_loss.backward()
             self.log_alpha_optimizer.step()
+    
+    # def update_actor_and_alpha(self, obs, picker_state, L, step):
+        # detach encoder, so we don't update it with the actor loss
+        # _, pi, log_pi, log_std = self.actor(obs, picker_state)
+        # actor_Q1, actor_Q2 = self.critic(obs, picker_state, pi)
+# 
+        # actor_Q = torch.min(actor_Q1, actor_Q2)
+        # actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
+# 
+        # if step % self.log_interval == 0:
+            # L.log('train_actor/loss', actor_loss, step)
+            # if self.args.wandb:
+                # wandb.log({'train_actor_loss': actor_loss}, step=step)
+# 
+        # optimize the actor
+        # self.actor_optimizer.zero_grad()
+        # actor_loss.backward()
+        # self.actor_optimizer.step()
+# 
+        # if self.args.lr_decay is not None:
+            # self.actor_lr_scheduler.step()
+            # L.log('train/actor_lr', self.actor_optimizer.param_groups[0]['lr'], step)
+# 
+        # if not self.alpha_fixed:
+            # self.log_alpha_optimizer.zero_grad()
+            # alpha_loss = (self.alpha * (-log_pi - self.target_entropy).detach()).mean()
+            # if step % self.log_interval == 0:
+                # L.log('train_alpha/loss', alpha_loss, step)
+                # L.log('train_alpha/value', self.alpha, step)
+                # if self.args.wandb:
+                    # wandb.log({'train_alpha_loss': alpha_loss}, step=step)
+                    # wandb.log({'train_alpha_value': self.alpha}, step=step)
+            # alpha_loss.backward()
+            # self.log_alpha_optimizer.step()
 
     def update(self, replay_buffer, L, step):
         #sample from buffer
-        # s_s = time.time()
         obs, action, reward, next_obs, not_done = replay_buffer.sample_proprio()
-        # print('sample time', time.time() - s_s)
+        # obs, action, reward, next_obs, not_done, picker_state, next_picker_state = replay_buffer.sample_proprio()
 
         if step % self.log_interval == 0:
             L.log('train/batch_reward', reward.mean(), step)
@@ -565,14 +563,12 @@ class SacAgent(object):
 
         #----Update----
         #Critic
-        # s_c = time.time()
         self.update_critic(obs, action, reward, next_obs, not_done, L, step)
-        # print('critic time', time.time() - s_c)
+        # self.update_critic(obs, action, reward, next_obs, not_done, picker_state, next_picker_state, L, step)
         #Actor
         if step % self.actor_update_freq == 0: #default actor_update_freq = 2
-            # s_a = time.time()
             self.update_actor_and_alpha(obs, L, step)
-            # print('actor time', time.time() - s_a)
+            # self.update_actor(ons, picker_state, L, step)
         #soft update
         if step % self.critic_target_update_freq == 0:
             utils.soft_update_params(self.critic, self.critic_target, self.critic_tau)

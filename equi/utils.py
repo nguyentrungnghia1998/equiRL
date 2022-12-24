@@ -103,15 +103,14 @@ def preprocess_obs(obs, bits=5):
 
 class ReplayBuffer(Dataset):
     """Buffer to store environment transitions."""
-
     def __init__(self, obs_shape, action_shape, capacity, batch_size, device, image_size=84, transform=None):
         self.capacity = capacity
         self.batch_size = batch_size
         self.device = device
         self.image_size = image_size
         self.transform = transform
-        # the proprioceptive obs is stored as float32, pixels obs as uint8
-        obs_dtype = np.float32 if len(obs_shape) == 1 else np.uint8
+        # the proprioceptive obs is stored as uint8
+        obs_dtype = np.uint8
 
         self.obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
         self.next_obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
@@ -119,10 +118,13 @@ class ReplayBuffer(Dataset):
         self.rewards = np.empty((capacity, 1), dtype=np.float32)
         self.not_dones = np.empty((capacity, 1), dtype=np.float32)
 
+        # self.picker_state = np.empty((capacity, 2), dtype=np.obs_dtype)
+        # self.next_picker_state = np.empty((capacity, 2), dtype=np.obs_dtype)
+
         self.idx = 0
         self.last_save = 0
         self.full = False
-
+    # def add(self, obs, action, reward, next_obs, done, picker_state, next_picker_state):
     def add(self, obs, action, reward, next_obs, done):
 
         np.copyto(self.obses[self.idx], obs)
@@ -130,6 +132,8 @@ class ReplayBuffer(Dataset):
         np.copyto(self.rewards[self.idx], reward)
         np.copyto(self.next_obses[self.idx], next_obs)
         np.copyto(self.not_dones[self.idx], not done)
+        # np.copyto(self.picker_state[self.idx], picker_state)
+        # np.copyto(self.next_picker_state[self.idx], next_picker_state)
 
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.full or self.idx == 0
@@ -150,7 +154,10 @@ class ReplayBuffer(Dataset):
             next_obses, device=self.device
         ).float()
         not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)
+        # picker_state = torch.as_tensor(self.picker_state[idxs], device=self.device)
+        # next_picker_state = torch.as_tensor(self.next_picker_state[idxs], device=self.device)
         return obses, actions, rewards, next_obses, not_dones
+        # return obses, actions, rewards, next_obses, not_dones, picker_state, next_picker_state
 
 
     def sample_cpc(self):
@@ -179,8 +186,10 @@ class ReplayBuffer(Dataset):
         pos = torch.as_tensor(pos, device=self.device).float()
         cpc_kwargs = dict(obs_anchor=obses, obs_pos=pos,
                           time_anchor=None, time_pos=None)
-
+        # picker_state = torch.as_tensor(self.picker_state[idxs], device=self.device)
+        # next_picker_state = torch.as_tensor(self.next_picker_state[idxs], device=self.device)
         return obses, actions, rewards, next_obses, not_dones, cpc_kwargs
+        # retunr obses, actions, rewards, next_obses, not_dones, cpc_kwargs, picker_state, next_picker_state
 
     def save(self, save_dir):
         if self.idx == self.last_save:
@@ -192,6 +201,8 @@ class ReplayBuffer(Dataset):
             self.actions[self.last_save:self.idx],
             self.rewards[self.last_save:self.idx],
             self.not_dones[self.last_save:self.idx]
+            # self.picker_state[self.last_save:self.idx]
+            # self.next_picker_state[self.last_save:self.idx]
         ]
         self.last_save = self.idx
         torch.save(payload, path)
@@ -209,6 +220,8 @@ class ReplayBuffer(Dataset):
             self.actions[start:end] = payload[2]
             self.rewards[start:end] = payload[3]
             self.not_dones[start:end] = payload[4]
+            # self.picker_state[start:end] = payload[5]
+            # self.next_picker_state[start:end] = payload[6]
             self.idx = end
 
     def __getitem__(self, idx):
@@ -221,12 +234,15 @@ class ReplayBuffer(Dataset):
         reward = self.rewards[idx]
         next_obs = self.next_obses[idx]
         not_done = self.not_dones[idx]
+        # picker_state = self.picker_state[idx]
+        # next_picker_state = self.next_picker_state[idx]
 
         if self.transform:
             obs = self.transform(obs)
             next_obs = self.transform(next_obs)
 
         return obs, action, reward, next_obs, not_done
+        # return obs, action, reward, next_obs, not_done, picker_state, next_picker_state
 
     def __len__(self):
         return self.capacity
@@ -444,27 +460,6 @@ def center_crop_image(image, output_size):
     image = image[:, top:top + new_h, left:left + new_w]
     # print('output image shape:', image.shape)
     return image
-
-def preprocess_action(action):
-    dxy = action[:, ::2]
-    dxy1 = dxy[:, :2]
-    dxy1[:, 0] = torch.where(dxy1[:, 0] != 0, dxy1[:, 0], 1e-9)
-    dxy2 = dxy[:, 2:]
-    dz = torch.cat([action[:, 1:2], action[:, 5:6]], dim=1)
-    p = action[:, 3:4]
-    m = dxy2[:, 0] / dxy1[:, 0]
-    m = torch.clamp(m, -1.0, 1.0).view(-1, 1)
-    new_action = torch.cat([dxy[:, :2], dz, p, m], dim=1)
-    return new_action
-
-def posprocess_action(action):
-    dxy1 = action[:, :2]
-    dz = action[:, 2:4]
-    p = action[:, 4:5]
-    m = action[:, 5:6]
-    dxy2 = dxy1 * m
-    new_action = torch.cat([dxy1[:, 0:1], dz[:, 0:1], dxy1[:, 1:], p,  dxy2[:, 0:1], dz[:, 1:], dxy2[:, 1:], p], dim=1)
-    return new_action
 
 def choose_random_particle_from_boundary(env):
     picker_pos, particle_pos = env.action_tool._get_pos()
@@ -746,3 +741,12 @@ def give_up_the_cloth(env, obs, episode_step, frames, replay_buffer):
         if done_bool == 1:
             return None
     return [episode_step, obs]
+
+def get_picker_state(env):
+    picker_state = []
+    for ps in env.action_tool.picked_particles:
+        if ps is None:
+            picker_state.append(0)
+        else:
+            picker_state.append(1) 
+    return np.array(picker_state, dtype=np.uint8)
