@@ -25,19 +25,27 @@ def postprocess_observation(observation, bit_depth):
         np.uint8)
 
 
-def _images_to_observation(images, bit_depth, image_dim, normalize_observation=True):
+def _images_to_observation(images, bit_depth, image_dim, normalize_observation=True,
+                            use_pick_old_state = False, num_picker = 2):
     dtype = torch.float32 if normalize_observation else torch.uint8
+    if use_pick_old_state:
+        picked = images[:,:,-num_picker:]
+        picked = picked[:image_dim,:image_dim,:]
+        picked = torch.tensor(picked.transpose(2,0,1),dtype = dtype)
+        images = images[:,:,:-num_picker]
     if images.shape[0] != image_dim:
         if images.shape[-1] == 1:
-            images = torch.tensor(cv2.resize(images, (image_dim, image_dim), interpolation=cv2.INTER_LINEAR).reshape(image_dim, image_dim, 1).transpose(2, 0, 1),
+            images = torch.tensor(cv2.resize(images, (image_dim, image_dim), interpolation=cv2.INTER_AREA).reshape(image_dim, image_dim, 1).transpose(2, 0, 1),
                               dtype=dtype)  # Resize and put channel first
         else:
-            images = torch.tensor(cv2.resize(images, (image_dim, image_dim), interpolation=cv2.INTER_LINEAR).transpose(2, 0, 1),
+            images = torch.tensor(cv2.resize(images, (image_dim, image_dim), interpolation=cv2.INTER_AREA).transpose(2, 0, 1),
                               dtype=dtype)
     else:
         images = torch.tensor(images.transpose(2, 0, 1), dtype=dtype)  # Resize and put channel first
     if normalize_observation:
         preprocess_observation_(images, bit_depth)  # Quantise, centre and dequantise inplace
+    if use_pick_old_state:
+        images = torch.cat((images,picked),axis = 0)
     return images.unsqueeze(dim=0)  # Add batch dimension
 
 
@@ -71,7 +79,9 @@ class SoftGymEnv(object):
             else:
                 return self.obs_process(obs)
         else:
-            return _images_to_observation(obs, self.bit_depth, self.image_dim, normalize_observation=self.normalize_observation)
+            return _images_to_observation(obs, self.bit_depth, self.image_dim, normalize_observation=self.normalize_observation,
+                                             use_pick_old_state=self._env._wrapped_env.use_pick_old_state,
+                                             num_picker=self._env._wrapped_env.action_tool.num_picker)
 
     def step(self, action, **kwargs):
         if not isinstance(action, np.ndarray):
@@ -90,7 +100,9 @@ class SoftGymEnv(object):
                 else:
                     obs = self.obs_process(obs)
             else:
-                obs = _images_to_observation(obs, self.bit_depth, self.image_dim, normalize_observation=self.normalize_observation)
+                obs = _images_to_observation(obs, self.bit_depth, self.image_dim, normalize_observation=self.normalize_observation,
+                                            use_pick_old_state=self._env._wrapped_env.use_pick_old_state,
+                                            num_picker=self._env._wrapped_env.action_tool.num_picker)
             if done:
                 break
         return obs, reward, done, info
