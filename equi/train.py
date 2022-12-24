@@ -248,12 +248,12 @@ def main(args):
             image_size=args.image_size,
         )
 
-    agent = make_agent(
-        obs_shape=obs_shape,
-        action_shape=action_shape,
-        args=args,
-        device=device
-    )
+    # agent = make_agent(
+    #     obs_shape=obs_shape,
+    #     action_shape=action_shape,
+    #     args=args,
+    #     device=device
+    # )
     
     print('==================== START COLLECTING DEMONSTRATIONS ====================')
     all_frames_planner = []
@@ -313,14 +313,16 @@ def main(args):
             episode_step, obs = release[0], release[1]
         all_frames_planner.append(frames)
         print('[INFO]Collected {} demonstrations'.format(count_planner))
-        if count_planner == 20:
+        if count_planner == 50:
             print('==================== FINISH COLLECTING DEMONSTRATIONS ====================')
             break
 
-    # final_reward.append(reward)
-    all_frames_planner = np.array(all_frames_planner).swapaxes(0, 1)
-    all_frames_planner = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in all_frames_planner])
-    save_numpy_as_gif(all_frames_planner, os.path.join(video_dir, 'expert.gif'))
+    for i in range(5):
+        sub_all_frames_planner = all_frames_planner[i*10:(i+1)*10] 
+        sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
+        sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in sub_all_frames_planner])
+        save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'expert_{}.gif'.format(i)))
+    exit()
 
     episode, episode_reward, done, ep_info = 0, 0, True, []
     start_time = time.time()
