@@ -104,17 +104,20 @@ def preprocess_obs(obs, bits=5):
 class ReplayBuffer(Dataset):
     """Buffer to store environment transitions."""
 
-    def __init__(self, obs_shape, action_shape, capacity, batch_size, device, image_size=84, transform=None):
+    def __init__(self, obs_shape, action_shape, capacity, batch_size, device, num_picker = 2, image_size=84, transform=None):
         self.capacity = capacity
         self.batch_size = batch_size
         self.device = device
         self.image_size = image_size
         self.transform = transform
+        self.num_picker = num_picker
         # the proprioceptive obs is stored as float32, pixels obs as uint8
         obs_dtype = np.float32 if len(obs_shape) == 1 else np.uint8
 
         self.obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
         self.next_obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
+        self.picker_states = np.empty((capacity, num_picker), dtype=np.uint8)
+        self.next_picker_states = np.empty((capacity, num_picker), dtype = np.uint8)
         self.actions = np.empty((capacity, *action_shape), dtype=np.float32)
         self.rewards = np.empty((capacity, 1), dtype=np.float32)
         self.not_dones = np.empty((capacity, 1), dtype=np.float32)
@@ -123,12 +126,14 @@ class ReplayBuffer(Dataset):
         self.last_save = 0
         self.full = False
 
-    def add(self, obs, action, reward, next_obs, done):
+    def add(self, obs, picker_state, action, reward, next_obs, next_picker_state, done):
 
         np.copyto(self.obses[self.idx], obs)
+        np.copyto(self.picker_states[self.idx],picker_state)
         np.copyto(self.actions[self.idx], action)
         np.copyto(self.rewards[self.idx], reward)
         np.copyto(self.next_obses[self.idx], next_obs)
+        np.copyto(self.next_picker_states[self.idx], next_picker_state)
         np.copyto(self.not_dones[self.idx], not done)
 
         self.idx = (self.idx + 1) % self.capacity
@@ -144,13 +149,15 @@ class ReplayBuffer(Dataset):
         next_obses = self.next_obses[idxs]
 
         obses = torch.as_tensor(obses, device=self.device).float()
+        picker_states = torch.as_tensor(self.picker_states[idxs], device = self.device)
         actions = torch.as_tensor(self.actions[idxs], device=self.device)
         rewards = torch.as_tensor(self.rewards[idxs], device=self.device)
         next_obses = torch.as_tensor(
             next_obses, device=self.device
         ).float()
+        next_picker_states = torch.as_tensor(self.next_picker_states[idxs], device = self.device)
         not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)
-        return obses, actions, rewards, next_obses, not_dones
+        return obses, picker_states, actions, rewards, next_obses, next_picker_states, not_dones
 
 
     def sample_cpc(self):
@@ -191,7 +198,9 @@ class ReplayBuffer(Dataset):
             self.next_obses[self.last_save:self.idx],
             self.actions[self.last_save:self.idx],
             self.rewards[self.last_save:self.idx],
-            self.not_dones[self.last_save:self.idx]
+            self.not_dones[self.last_save:self.idx],
+            self.picker_states[self.last_save:self.idx],
+            self.next_picker_states[self.last_save:self.idx]
         ]
         self.last_save = self.idx
         torch.save(payload, path)
@@ -209,6 +218,8 @@ class ReplayBuffer(Dataset):
             self.actions[start:end] = payload[2]
             self.rewards[start:end] = payload[3]
             self.not_dones[start:end] = payload[4]
+            self.picker_states[start:end] = payload[5]
+            self.next_picker_states[start:end] = payload[6]
             self.idx = end
 
     def __getitem__(self, idx):
@@ -221,23 +232,25 @@ class ReplayBuffer(Dataset):
         reward = self.rewards[idx]
         next_obs = self.next_obses[idx]
         not_done = self.not_dones[idx]
+        picker_state = self.picker_states[idx]
+        next_picker_state = self.next_picker_states[idx]
 
         if self.transform:
             obs = self.transform(obs)
             next_obs = self.transform(next_obs)
 
-        return obs, action, reward, next_obs, not_done
+        return obs, action, reward, next_obs, not_done, picker_state, next_picker_state
 
     def __len__(self):
         return self.capacity
 
 class ReplayBufferAugmented(ReplayBuffer):
-    def __init__(self, obs_shape, action_shape, capacity, batch_size, device, image_size=84, transform=None, aug_n=9):
-        super().__init__(obs_shape, action_shape, capacity, batch_size, device, image_size, transform)
+    def __init__(self, obs_shape, action_shape, capacity, batch_size, device, num_picker = 2, image_size=84, transform=None, aug_n=9):
+        super().__init__(obs_shape, action_shape, capacity, batch_size, device, num_picker, image_size, transform)
         self.aug_n = aug_n
     
-    def add(self, obs, action, reward, next_obs, done):
-        super().add(obs, action, reward, next_obs, done)
+    def add(self, obs, picker_state, action, reward, next_obs, next_picker_state, done):
+        super().add(obs, picker_state, action, reward, next_obs, next_picker_state, done)
         # os.makedirs('augmented', exist_ok=True)
         # plt.figure(figsize=(15, 15))
         # plt.subplot(self.aug_n+1, 2, 1)
@@ -250,7 +263,7 @@ class ReplayBufferAugmented(ReplayBuffer):
             # plt.imshow(obs_[0].numpy().transpose(1, 2, 0))
             # plt.subplot(self.aug_n+1, 2, 2*i+4)
             # plt.imshow(next_obs_[0].numpy().transpose(1, 2, 0))
-            super().add(obs_, action_, reward_, next_obs_, done_)
+            super().add(obs_, picker_state, action_, reward_, next_obs_, next_picker_state, done_)
         # plt.savefig(f'augmented/{self.idx}.png')
         # exit()
 
@@ -486,7 +499,7 @@ def choose_random_particle_from_boundary(env):
         return np.array([choosen_id[1], choosen_id[0]])
     return choosen_id
 
-def pick_choosen_point(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer, max_step=10):
+def pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, replay_buffer, max_step=10):
     count_pick_bound = 0
     while True:
         picker_pos, particle_pos = env.action_tool._get_pos()
@@ -499,8 +512,9 @@ def pick_choosen_point(env, obs, choosen_id, thresh, episode_step, frames, repla
         else:
             action = np.concatenate([action, np.zeros((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
         done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, done_bool)
         frames.append(env.get_image(128, 128))
         obs = next_obs
         episode_step += 1
@@ -512,15 +526,16 @@ def pick_choosen_point(env, obs, choosen_id, thresh, episode_step, frames, repla
         if all(i != None for i in env.action_tool.picked_particles) and len(set(particle_pos[env.action_tool.picked_particles, 3])) == 1:
             return [episode_step, obs]
 
-def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer, max_step=10):
+def fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, replay_buffer, max_step=10):
     # fling primitive
     # first, move to the cloth up to the ground
     count_move_height = 0
     while True:
         action = np.array([0, 1, 0, 1, 0, 1, 0, 1])
         next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
         done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, done_bool)
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
@@ -536,8 +551,9 @@ def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_b
             break
         action = np.array([0, -0.2, 0, 1, 0, -0.2, 0, 1])
         next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
         done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, done_bool)
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
@@ -572,8 +588,9 @@ def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_b
         action = np.clip(dis, -0.08, 0.08) / 0.08
         action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
         done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, done_bool)
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
@@ -599,8 +616,9 @@ def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_b
         m = np.exp(-i)
         action = np.array([dx*m, m, dy*m, 1.0, dx*m, m, dy*m, 1.0])
         next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
         done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, done_bool)
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
@@ -613,8 +631,9 @@ def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_b
         m = np.exp(-i/20)
         action = np.array([-dx*m, -m, -dy*m, 1.0, -dx*m, -m, -dy*m, 1.0])
         next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
         done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, done_bool)
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
@@ -622,7 +641,7 @@ def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_b
             return None
     return [episode_step, obs]
 
-def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer, max_step=10):
+def pick_drag_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, replay_buffer, max_step=10):
     # move to picker to the height 0.1
     curr_pos = env.action_tool._get_pos()[0]
     curr_pos[:, 1] = 0.1
@@ -633,8 +652,9 @@ def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, repl
         action = np.clip(dis, -0.08, 0.08) / 0.08
         action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
         done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, done_bool)
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
@@ -669,8 +689,9 @@ def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, repl
         action = np.clip(dis, -0.08, 0.08) / 0.08
         action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
         done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, done_bool)
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
@@ -701,8 +722,9 @@ def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, repl
         # m = 1
         action = np.array([dx*m, 0, dy*m, 1.0, dx*m, 0, dy*m, 1.0])
         next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
         done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, done_bool)
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
@@ -714,8 +736,9 @@ def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, repl
             break
         action = np.array([0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 0.0, 1.0])
         next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
         done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, done_bool)
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
@@ -723,11 +746,12 @@ def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, repl
             return None
     return [episode_step, obs]
 
-def give_up_the_cloth(env, obs, episode_step, frames, replay_buffer):
+def give_up_the_cloth(env, obs, picker_state, episode_step, frames, replay_buffer):
     action = np.zeros(8)
     next_obs, reward, done, info = env.step(action)
+    next_picker_state = get_picker_state(env)
     done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-    replay_buffer.add(obs, action, reward, next_obs, done_bool)
+    replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, done_bool)
     frames.append(env.get_image(128, 128))
     episode_step += 1
     obs = next_obs
@@ -738,11 +762,21 @@ def give_up_the_cloth(env, obs, episode_step, frames, replay_buffer):
     for _ in range(2):
         action = np.array([0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
         next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
         done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, done_bool)
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
         if done_bool == 1:
             return None
     return [episode_step, obs]
+
+def get_picker_state(env):
+    picker_state = []
+    for ps in env.action_tool.picked_particles:
+        if ps is None:
+            picker_state.append(0)
+        else:
+            picker_state.append(1) 
+    return np.array(picker_state, dtype=np.uint8)
