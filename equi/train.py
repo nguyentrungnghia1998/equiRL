@@ -105,6 +105,7 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
                     else:
                         action = agent.select_action(obs)
                         # action = agent.select_action(obs, picker_state)
+                # action = np.array([1.0, -1.0, 0.0, 0.0, -1.0, -1.0, 0.0, 0.0])
                 obs, reward, done, info = env.step(action)
                 # picker_state = utils.get_picker_state()
                 episode_reward += reward
@@ -138,7 +139,6 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
 
     run_eval_loop(sample_stochastically=False)
     L.dump(step)
-
 
 def make_agent(obs_shape, action_shape, args, device):
     if args.agent == 'sac':
@@ -197,7 +197,7 @@ def main(args):
     symbolic = False if args.env_kwargs['observation_mode'] in ['cam_rgb', 'img_depth', 'only_depth'] else True
     args.encoder_type = 'identity' if symbolic else 'pixel'
 
-    env = Env(args.env_name, symbolic, args.seed, 100, 1, 8, args.pre_transform_image_size, env_kwargs=args.env_kwargs, normalize_observation=False,
+    env = Env(args.env_name, symbolic, args.seed, 200, 1, 8, args.pre_transform_image_size, env_kwargs=args.env_kwargs, normalize_observation=False,
               scale_reward=args.scale_reward, clip_obs=args.clip_obs)
     env.seed(args.seed)
 
@@ -222,8 +222,8 @@ def main(args):
         else:
             n = 4
 
-        if args.env_kwargs['use_pick_old_state']:
-            n+=args.env_kwargs['num_picker']
+        if args.env_kwargs['use_picker_state']:
+            n += args.env_kwargs['num_picker']
         obs_shape = (n, args.image_size, args.image_size)
         pre_aug_obs_shape = (n, args.pre_transform_image_size, args.pre_transform_image_size)
     else:
@@ -261,68 +261,95 @@ def main(args):
     
     print('==================== START COLLECTING DEMONSTRATIONS ====================')
     all_frames_planner = []
+    all_expert_data_planner = []
     thresh = env.cloth_particle_radius + env.action_tool.picker_radius + env.action_tool.picker_threshold
     count_planner = 0
+    
     while True:
         obs = env.reset()
         # picker_state = utils.get_picker_state(env)
         episode_step = 0
         frames = [env.get_image(128, 128)]
+        expert_data = []
+        flag_reset = False
+        flag_rest_and_count = False
         while True:
             # choose random boundary point
             choosen_id = utils.choose_random_particle_from_boundary(env)
             if choosen_id is None:
                 print('[INFO] Cannot find boundary point!!!')
+                flag_reset = True
                 break
             # move to two choosen boundary points and pick them
-            pick_choosen = utils.pick_choosen_point(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer)
+            pick_choosen = utils.pick_choosen_point(env, obs, choosen_id, thresh, episode_step, frames, expert_data)
             # pick_choosen = utils.pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, replay_buffer)
-            if pick_choosen is None:
-                count_planner += 1
-                break
             if pick_choosen == 1:
-                # release the cloth
-                release = utils.give_up_the_cloth(env, obs, episode_step, frames, replay_buffer)
-                # release = utils.give_up_the_cloth(env, obs, picker_state, episode_step, frames, replay_buffer)
-                if release is None:
-                    count_planner += 1
-                    break
-                episode_step, obs = release[0], release[1]
-                continue
+                count_planner += 1
+                flag_reset_and_count = True
+                break
+            if pick_choosen is None:
+                flag_reset = True
+                break
             else:
                 episode_step, obs = pick_choosen[0], pick_choosen[1]
-            # choose fling primitive or pick&drag primitive
             if np.random.rand() < 0.5:
                 # fling primitive
-                fling = utils.fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer)
+                fling = utils.fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, expert_data)
                 # fling = utils.fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, replay_buffer)
-                if fling is None:
+                if fling == 1:
                     count_planner += 1
+                    flag_reset_and_count = True
+                    break
+                if fling is None:
+                    flag_reset = True
                     break
                 episode_step, obs = fling[0], fling[1]
             else:
                 # pick&drag primitive
-                pick_drag = utils.pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer)
+                pick_drag = utils.pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, expert_data)
                 # pick_drag = utils.pick_drag_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, replay_buffer)
-                if pick_drag is None:
+                if pick_drag == 1:
                     count_planner += 1
+                    flag_reset_and_count = True
+                    break
+                if pick_drag is None:
+                    flag_reset = True
                     break
                 episode_step, obs = pick_drag[0], pick_drag[1]
             # release the cloth
-            release = utils.give_up_the_cloth(env, obs, episode_step, frames, replay_buffer)
+            release = utils.give_up_the_cloth(env, obs, episode_step, frames, expert_data)
             # release = utils.give_up_the_cloth(env, obs, picker_state, episode_step, frames, replay_buffer)
-            if release is None:
+            if release == 1:
                 count_planner += 1
+                flag_reset_and_count = True
+                break
+            if release is None:
+                flag_reset = True
                 break
             episode_step, obs = release[0], release[1]
+        if flag_reset:
+            continue
+        if len(frames) != 100:
+            for _ in range(100 - len(frames)):
+                frames.append(env.get_image(128, 128))
         all_frames_planner.append(frames)
+        all_expert_data_planner.append(expert_data)
         print('[INFO]Collected {} demonstrations'.format(count_planner))
-        if count_planner == 50:
+        if count_planner == 20:
             print('==================== FINISH COLLECTING DEMONSTRATIONS ====================')
             break
+    re = []
+    for i in all_expert_data_planner:
+        re.append(i[-1][2])
+    re = np.array(re)
+    print(re)
+    # exit()
+    
 
-    for i in range(5):
-        sub_all_frames_planner = all_frames_planner[i*10:(i+1)*10] 
+
+
+    for i in range(1):
+        sub_all_frames_planner = all_frames_planner[i*20:(i+1)*20] 
         sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
         sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in sub_all_frames_planner])
         save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'expert_{}.gif'.format(i)))
@@ -382,7 +409,7 @@ def main(args):
         # next_picker_state = utils.get_picker_state()
         # allow infinit bootstrap
         ep_info.append(info)
-        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
+        done_bool = 0 if episode_step + 1 == env.horizon else float(done)
         episode_reward += reward
         replay_buffer.add(obs, action, reward, next_obs, done_bool)
         # replay_buffer.add(obs, action, reward, next_obs, done_bool, picker_state, next_picker_state)

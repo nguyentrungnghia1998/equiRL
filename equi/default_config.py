@@ -57,5 +57,7 @@ DEFAULT_CONFIG = {
     'num_rotations': 8,
     # wandb
     'wandb': False,
-    'wandb_seed': 8
+    'wandb_seed': 9,
+    # expert
+    'num_demonstration': 100
 }

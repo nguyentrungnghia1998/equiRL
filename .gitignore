@@ -3,6 +3,7 @@ wandb/*
 .vscode
 softgym/softgym/cached_initial_states/*
 **/__pycache__/
+.history/*
 
 softgym/softgym/cached_initial_states/*
 softgym/softgym/envs/corl_cached_state_backup

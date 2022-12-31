@@ -8,11 +8,11 @@ from copy import deepcopy
 
 
 class ClothEnv(FlexEnv):
-    def __init__(self, observation_mode, action_mode, num_picker=2, render_mode='particle', picker_radius=0.025, picker_threshold=0.005, particle_radius=0.00625, use_pick_old_state = False, **kwargs):
+    def __init__(self, observation_mode, action_mode, num_picker=2, render_mode='particle', picker_radius=0.03, picker_threshold=0.005, particle_radius=0.00625, use_picker_state = False, **kwargs):
         self.render_mode = render_mode
         self.action_mode = action_mode
         self.cloth_particle_radius = particle_radius
-        self.use_pick_old_state = use_pick_old_state
+        self.use_picker_state = use_picker_state
         super().__init__(**kwargs)
 
         assert observation_mode in ['key_point', 'point_cloud', 'cam_rgb', 'img_depth', 'only_depth']
@@ -123,7 +123,7 @@ class ClothEnv(FlexEnv):
         if self.observation_mode == 'only_depth':
             output = self.get_image_with_depth(self.camera_height, self.camera_width, get_image=False)
         if self.observation_mode in ['cam_rgb','img_depth','only_depth']:
-            if self.use_pick_old_state:
+            if self.use_picker_state:
                 picked = [0 if item is None else 255 for item in self.action_tool.picked_particles]
                 picked = np.tile(picked,(self.camera_height,self.camera_width,1))
                 return np.concatenate((output, picked.astype(np.uint8)), axis=2) 

@@ -256,17 +256,46 @@ class ReplayBufferAugmented(ReplayBuffer):
         super().add(obs, action, reward, next_obs, done)
         # os.makedirs('augmented', exist_ok=True)
         # plt.figure(figsize=(15, 15))
-        # plt.subplot(self.aug_n+1, 2, 1)
-        # plt.imshow(obs[0].numpy().transpose(1, 2, 0))
-        # plt.subplot(self.aug_n+1, 2, 2)
-        # plt.imshow(next_obs[0].numpy().transpose(1, 2, 0))
+        # plt.subplot(self.aug_n+1, 6, 1)
+        # plt.imshow(obs[0][0].numpy())
+        # plt.colorbar()
+        # plt.subplot(self.aug_n+1, 6, 2)
+        # plt.imshow(obs[0][1].numpy())
+        # plt.colorbar()
+        # plt.subplot(self.aug_n+1, 6, 3)
+        # plt.imshow(obs[0][2].numpy())
+        # plt.colorbar()
+        # plt.subplot(self.aug_n+1, 6, 4)
+        # plt.imshow(next_obs[0][0].numpy())
+        # plt.colorbar()
+        # plt.subplot(self.aug_n+1, 6, 5)
+        # plt.imshow(next_obs[0][1].numpy())
+        # plt.colorbar()
+        # plt.subplot(self.aug_n+1, 6, 6)
+        # plt.imshow(next_obs[0][2].numpy())
+        # plt.colorbar()
         for i in range(self.aug_n):
             obs_, action_, reward_, next_obs_, done_ = augmentTransition(obs, action, reward, next_obs, done, DEFAULT_CONFIG['aug_type'])
-            # plt.subplot(self.aug_n+1, 2, 2*i+3)
-            # plt.imshow(obs_[0].numpy().transpose(1, 2, 0))
-            # plt.subplot(self.aug_n+1, 2, 2*i+4)
-            # plt.imshow(next_obs_[0].numpy().transpose(1, 2, 0))
+        #     plt.subplot(self.aug_n+1, 6, 6*i+7)
+        #     plt.imshow(obs_[0][0].numpy())
+        #     plt.colorbar()
+        #     plt.subplot(self.aug_n+1, 6, 6*i+8)
+        #     plt.imshow(obs_[0][1].numpy())
+        #     plt.colorbar()
+        #     plt.subplot(self.aug_n+1, 6, 6*i+9)
+        #     plt.imshow(obs_[0][2].numpy())
+        #     plt.colorbar()
+        #     plt.subplot(self.aug_n+1, 6, 6*i+10)
+        #     plt.imshow(next_obs_[0][0].numpy())
+        #     plt.colorbar()
+        #     plt.subplot(self.aug_n+1, 6, 6*i+11)
+        #     plt.imshow(next_obs_[0][1].numpy())
+        #     plt.colorbar()
+        #     plt.subplot(self.aug_n+1, 6, 6*i+12)
+        #     plt.imshow(next_obs_[0][2].numpy())
+        #     plt.colorbar()
             super().add(obs_, action_, reward_, next_obs_, done_)
+        # plt.title(f'{np.mean(obs[0][1].numpy()), np.mean(obs[0][2].numpy()), np.mean(next_obs[0][1].numpy()), np.mean(next_obs[0][2].numpy())}')
         # plt.savefig(f'augmented/{self.idx}.png')
         # exit()
 
@@ -300,6 +329,7 @@ def augmentTransitionSE2(obs, action, reward, next_obs, done):
     return obs, action, reward, next_obs, done
     
 def augmentTransitionSO2(obs, action, reward, next_obs, done):
+    # import ipdb; ipdb.set_trace()
     dxy = action[::2].copy()
     dxy1, dxy2 = np.split(dxy, 2)
     obs, next_obs, dxy1, dxy2, transform_params = perturb(obs[0].numpy().copy(),
@@ -365,10 +395,13 @@ def perturb(current_image, next_image, dxy1, dxy2, set_theta_zero=False, set_tra
         if next_image is not None:
             next_image = affine_transform(next_image, np.linalg.inv(transform), mode='nearest', order=1)
     else:
-        for i in range(current_image.shape[0]):
-            current_image[i, :, :] = affine_transform(current_image[i, :, :], np.linalg.inv(transform), mode='nearest', order=1)
-            if next_image is not None:
-                next_image[i, :, :] = affine_transform(next_image[i, :, :], np.linalg.inv(transform), mode='nearest', order=1)
+        # for i in range(current_image.shape[0]):
+        #     current_image[i, :, :] = affine_transform(current_image[i, :, :], np.linalg.inv(transform), mode='nearest', order=1)
+        #     if next_image is not None:
+        #         next_image[i, :, :] = affine_transform(next_image[i, :, :], np.linalg.inv(transform), mode='nearest', order=1)
+        current_image[0] = affine_transform(current_image[0], np.linalg.inv(transform), mode='nearest', order=1)
+        if next_image is not None:
+            next_image[0] = affine_transform(next_image[0], np.linalg.inv(transform), mode='nearest', order=1)
     return current_image, next_image, rotated_dxy1, rotated_dxy2, transform_params
 
 
@@ -463,25 +496,68 @@ def center_crop_image(image, output_size):
 
 def choose_random_particle_from_boundary(env):
     picker_pos, particle_pos = env.action_tool._get_pos()
-    hull = ConvexHull(particle_pos[:, [0, 2]])
+    try:
+        hull = ConvexHull(particle_pos[:, [0, 2]])
+    except:
+        return None
     bound_id = set()
     for simplex in hull.simplices:
         bound_id.add(simplex[0])
         bound_id.add(simplex[1])
-    # choose 2 random boundary id with min distance >= 6 * picker_radius
-    count_choose_id = 0
-    while True:
-        choosen_id = random.sample(bound_id, 2)
-        if np.linalg.norm(particle_pos[choosen_id[0], [0, 2]] - particle_pos[choosen_id[1], [0, 2]]) >=  4 * env.action_tool.picker_radius:
-            break
-        if count_choose_id > 20:
-            return None
+    # take the corner points
+    corner_point_upper_left, corner_point_lower_left, corner_point_upper_right, corner_point_lower_right = env._get_key_point_idx()[0], env._get_key_point_idx()[1], env._get_key_point_idx()[2], env._get_key_point_idx()[3]
+    corner = []
+    if corner_point_upper_left in bound_id and corner_point_lower_left in bound_id:
+        corner.append((corner_point_upper_left, corner_point_lower_left))
+    if corner_point_upper_left in bound_id and corner_point_upper_right in bound_id:
+        corner.append((corner_point_upper_left, corner_point_upper_right))
+    if corner_point_upper_right in bound_id and corner_point_lower_right in bound_id:
+        corner.append((corner_point_upper_right, corner_point_lower_right))
+    if corner_point_lower_left in bound_id and corner_point_lower_right in bound_id:
+        corner.append((corner_point_lower_left, corner_point_lower_right))
+    if len(corner) > 0:
+        choosen_id = np.array(random.sample(corner, 1)[0])
+        print(f'2 corners {choosen_id}')
+    else:
+        single_corner = []
+        if corner_point_upper_left in bound_id:
+            single_corner.append(corner_point_upper_left)
+        if corner_point_lower_left in bound_id:
+            single_corner.append(corner_point_lower_left)
+        if corner_point_upper_right in bound_id:
+            single_corner.append(corner_point_upper_right)
+        if corner_point_lower_right in bound_id:
+            single_corner.append(corner_point_lower_right)
+        if len(single_corner) > 0:
+            # choose 1 random corner and 1 random boundary id with min distance >= 6 * picker_radius
+            _id_1 = random.sample(single_corner, 1)
+            count_single_id = 0
+            while True:
+                _id_2 = random.sample(bound_id, 1)
+                count_single_id += 1
+                if _id_1 != _id_2 and np.linalg.norm(particle_pos[_id_1, [0, 2]] - particle_pos[_id_2, [0, 2]]) >=  6 * env.action_tool.picker_radius:
+                    choosen_id = np.array([_id_1[0], _id_2[0]])
+                    print(f'1 corner {choosen_id}')
+                    break
+                if count_single_id > 20:
+                    return None
+        else:
+            # choose 2 random boundary id with min distance >= 6 * picker_radius
+            count_choose_id = 0
+            while True:
+                choosen_id = random.sample(bound_id, 2)
+                count_choose_id += 1
+                if np.linalg.norm(particle_pos[choosen_id[0], [0, 2]] - particle_pos[choosen_id[1], [0, 2]]) >=  6 * env.action_tool.picker_radius:
+                    print(f'0 corner {choosen_id}')
+                    break
+                if count_choose_id > 20:
+                    return None
     # find the closest points for picker
     if np.linalg.norm(particle_pos[choosen_id[0], :3] - picker_pos[0]) > np.linalg.norm(particle_pos[choosen_id[1], :3] - picker_pos[0]):
         return np.array([choosen_id[1], choosen_id[0]])
     return choosen_id
 
-def pick_choosen_point(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer, max_step=10):
+def pick_choosen_point(env, obs, choosen_id, thresh, episode_step, frames, expert_data, max_step=10):
     count_pick_bound = 0
     while True:
         picker_pos, particle_pos = env.action_tool._get_pos()
@@ -489,38 +565,42 @@ def pick_choosen_point(env, obs, choosen_id, thresh, episode_step, frames, repla
         dis = target_pos - picker_pos
         norm = np.linalg.norm(dis, axis=1)
         action = np.clip(dis, -0.08, 0.08) / 0.08
-        if norm[0] <= thresh and norm[1] <= thresh:
+        # import ipdb; ipdb.set_trace()
+        if (norm <= thresh).all():
             action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         else:
-            action = np.concatenate([action, np.zeros((2, 1))], axis=1).reshape(-1)
+            try:
+                action = np.concatenate([action, np.zeros((2, 1))], axis=1).reshape(-1)
+            except:
+                import ipdb; ipdb.set_trace()
         next_obs, reward, done, info = env.step(action)
-        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        expert_data.append([obs, action, reward, next_obs, done])
         frames.append(env.get_image(128, 128))
         obs = next_obs
         episode_step += 1
         count_pick_bound += 1
-        if done_bool == 1:
-            return None
-        if count_pick_bound >= max_step:
+        if done:
             return 1
+        if episode_step == env.horizon or count_pick_bound >= max_step:
+            return None
         if all(i != None for i in env.action_tool.picked_particles) and len(set(particle_pos[env.action_tool.picked_particles, 3])) == 1:
             return [episode_step, obs]
 
-def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer, max_step=10):
+def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, expert_data, max_step=10):
     # fling primitive
     # first, move to the cloth up to the ground
     count_move_height = 0
     while True:
         action = np.array([0, 1, 0, 1, 0, 1, 0, 1])
         next_obs, reward, done, info = env.step(action)
-        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        expert_data.append([obs, action, reward, next_obs, done])
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
         count_move_height += 1
-        if done_bool == 1:
+        if done:
+            return 1
+        if episode_step == env.horizon:
             return None
         if (env.action_tool._get_pos()[1][:, 1] >= 2*env.cloth_particle_radius).all() or count_move_height >= max_step:
             break
@@ -531,13 +611,14 @@ def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_b
             break
         action = np.array([0, -0.2, 0, 1, 0, -0.2, 0, 1])
         next_obs, reward, done, info = env.step(action)
-        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        expert_data.append([obs, action, reward, next_obs, done])
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
         count_move_height_back += 1
-        if done_bool == 1:
+        if done:
+            return 1
+        if episode_step == env.horizon:
             return None
 
     # second, stretch the cloth
@@ -567,13 +648,14 @@ def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_b
         action = np.clip(dis, -0.08, 0.08) / 0.08
         action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
-        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        expert_data.append([obs, action, reward, next_obs, done])
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
         count_stretch += 1
-        if done_bool == 1:
+        if done:
+            return 1
+        if episode_step == env.horizon:
             return None
         if (norm <= thresh).all() or count_stretch >= max_step:
             break
@@ -594,12 +676,13 @@ def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_b
         m = np.exp(-i)
         action = np.array([dx*m, m, dy*m, 1.0, dx*m, m, dy*m, 1.0])
         next_obs, reward, done, info = env.step(action)
-        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        expert_data.append([obs, action, reward, next_obs, done])
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
-        if done_bool == 1:
+        if done:
+            return 1
+        if episode_step == env.horizon:
             return None
     # fourth, move back the cloth to the ground
     for i in range(20):
@@ -608,16 +691,17 @@ def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_b
         m = np.exp(-i/20)
         action = np.array([-dx*m, -m, -dy*m, 1.0, -dx*m, -m, -dy*m, 1.0])
         next_obs, reward, done, info = env.step(action)
-        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        expert_data.append([obs, action, reward, next_obs, done])
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
-        if done_bool == 1:
+        if done:
+            return 1
+        if episode_step == env.horizon:
             return None
     return [episode_step, obs]
 
-def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer, max_step=10):
+def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, expert_data, max_step=10):
     # move to picker to the height 0.1
     curr_pos = env.action_tool._get_pos()[0]
     curr_pos[:, 1] = 0.1
@@ -628,12 +712,13 @@ def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, repl
         action = np.clip(dis, -0.08, 0.08) / 0.08
         action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
-        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        expert_data.append([obs, action, reward, next_obs, done])
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
-        if done_bool == 1:
+        if done:
+            return 1
+        if episode_step == env.horizon:
             return None
         if (norm <= thresh).all():
             break
@@ -664,13 +749,14 @@ def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, repl
         action = np.clip(dis, -0.08, 0.08) / 0.08
         action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
-        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        expert_data.append([obs, action, reward, next_obs, done])
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
         count_stretch += 1
-        if done_bool == 1:
+        if done:
+            return 1
+        if episode_step == env.horizon:
             return None
         if (norm < thresh).all() or count_stretch >= max_step:
             break
@@ -696,12 +782,13 @@ def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, repl
         # m = 1
         action = np.array([dx*m, 0, dy*m, 1.0, dx*m, 0, dy*m, 1.0])
         next_obs, reward, done, info = env.step(action)
-        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        expert_data.append([obs, action, reward, next_obs, done])
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
-        if done_bool == 1:
+        if done:
+            return 1
+        if episode_step == env.horizon:
             return None
     # move the picker down
     while True:
@@ -709,36 +796,39 @@ def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, repl
             break
         action = np.array([0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 0.0, 1.0])
         next_obs, reward, done, info = env.step(action)
-        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        expert_data.append([obs, action, reward, next_obs, done])
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
-        if done_bool == 1:
+        if done:
+            return 1
+        if episode_step == env.horizon:
             return None
     return [episode_step, obs]
 
-def give_up_the_cloth(env, obs, episode_step, frames, replay_buffer):
+def give_up_the_cloth(env, obs, episode_step, frames, expert_data):
     action = np.zeros(8)
     next_obs, reward, done, info = env.step(action)
-    done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-    replay_buffer.add(obs, action, reward, next_obs, done_bool)
+    expert_data.append([obs, action, reward, next_obs, done])
     frames.append(env.get_image(128, 128))
     episode_step += 1
     obs = next_obs
-    if done_bool == 1:
+    if done:
+        return 1
+    if episode_step == env.horizon:
         return None
     
     # move the picker up
     for _ in range(2):
         action = np.array([0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
         next_obs, reward, done, info = env.step(action)
-        done_bool = 1 if episode_step + 1 == env.horizon else float(done)
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        expert_data.append([obs, action, reward, next_obs, done])
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
-        if done_bool == 1:
+        if done:
+            return 1
+        if episode_step == env.horizon:
             return None
     return [episode_step, obs]
 

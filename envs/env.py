@@ -26,9 +26,9 @@ def postprocess_observation(observation, bit_depth):
 
 
 def _images_to_observation(images, bit_depth, image_dim, normalize_observation=True,
-                            use_pick_old_state = False, num_picker = 2):
+                            use_picker_state = False, num_picker = 2):
     dtype = torch.float32 if normalize_observation else torch.uint8
-    if use_pick_old_state:
+    if use_picker_state:
         picked = images[:,:,-num_picker:]
         picked = picked[:image_dim,:image_dim,:]
         picked = torch.tensor(picked.transpose(2,0,1),dtype = dtype)
@@ -44,7 +44,7 @@ def _images_to_observation(images, bit_depth, image_dim, normalize_observation=T
         images = torch.tensor(images.transpose(2, 0, 1), dtype=dtype)  # Resize and put channel first
     if normalize_observation:
         preprocess_observation_(images, bit_depth)  # Quantise, centre and dequantise inplace
-    if use_pick_old_state:
+    if use_picker_state:
         images = torch.cat((images,picked),axis = 0)
     return images.unsqueeze(dim=0)  # Add batch dimension
 
@@ -80,7 +80,7 @@ class SoftGymEnv(object):
                 return self.obs_process(obs)
         else:
             return _images_to_observation(obs, self.bit_depth, self.image_dim, normalize_observation=self.normalize_observation,
-                                             use_pick_old_state=self._env._wrapped_env.use_pick_old_state,
+                                             use_picker_state=self._env._wrapped_env.use_picker_state,
                                              num_picker=self._env._wrapped_env.action_tool.num_picker)
 
     def step(self, action, **kwargs):
@@ -91,7 +91,10 @@ class SoftGymEnv(object):
             obs, reward_k, done, info = self._env.step(action, **kwargs)
             reward += reward_k
             self.t += 1  # Increment internal timer
-            done = done or self.t == self.max_episode_length
+
+            # done = done or self.t == self.max_episode_length
+
+            # if done:
             # print('t:', self.t, self.max_episode_length, done)
             if self.symbolic:
                 if self.obs_process is None:
@@ -101,7 +104,7 @@ class SoftGymEnv(object):
                     obs = self.obs_process(obs)
             else:
                 obs = _images_to_observation(obs, self.bit_depth, self.image_dim, normalize_observation=self.normalize_observation,
-                                            use_pick_old_state=self._env._wrapped_env.use_pick_old_state,
+                                            use_picker_state=self._env._wrapped_env.use_picker_state,
                                             num_picker=self._env._wrapped_env.action_tool.num_picker)
             if done:
                 break
