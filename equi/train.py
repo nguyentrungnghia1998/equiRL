@@ -85,33 +85,35 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
         plt.figure()
         for i in range(num_episodes):
             obs = env.reset(eval_flag=True)
-            # picker_state = utils.get_picker_state()
+            picker_state = utils.get_picker_state()
             done = False
             episode_reward = 0
             ep_info = []
             frames = [env.get_image(128, 128)]
             rewards = []
+            count = 0
             while not done:
                 if args.encoder_type == 'pixel':
                     if obs.shape[0] == 1:
                         obs = obs[0]
-                    # if picker_state.shape[0] == 1:
-                        # picker_state = picker_state[0]
                     
                 with utils.eval_mode(agent):
                     if sample_stochastically:
-                        action = agent.sample_action(obs)
-                        # action = agent.sample_action(obs, picker_state)
+                        action = agent.sample_action(obs, picker_state)
                     else:
-                        action = agent.select_action(obs)
-                        # action = agent.select_action(obs, picker_state)
-                # action = np.array([1.0, -1.0, 0.0, 0.0, -1.0, -1.0, 0.0, 0.0])
+                        action = agent.select_action(obs, picker_state)
                 obs, reward, done, info = env.step(action)
-                # picker_state = utils.get_picker_state()
+                picker_state = utils.get_picker_state()
                 episode_reward += reward
+                count += 1
                 ep_info.append(info)
                 frames.append(env.get_image(128, 128))
                 rewards.append(reward)
+                if done:
+                    for i in range(env.horizon - count):
+                        frames.append(env.get_image(128, 128))
+                if count == env.horizon:
+                    done = True
             plt.plot(range(len(rewards)), rewards)
             if len(all_frames) < 8:
                 all_frames.append(frames)
@@ -178,12 +180,6 @@ def make_agent(obs_shape, action_shape, args, device):
 
 
 def main(args):
-    # import ipdb; ipdb.set_trace()
-    # a = 0
-    # for i in range(6):
-    #     a += np.exp(-i/2)
-    # print(a)
-    # exit()
     torch.cuda.empty_cache()
     if args.seed == -1:
         args.__dict__["seed"] = np.random.randint(1, 1000000)
@@ -332,7 +328,7 @@ def main(args):
         all_frames_planner.append(frames)
         all_expert_data_planner.append(expert_data)
         print('[INFO]Collected {} demonstrations'.format(count_planner))
-        if count_planner == 1:
+        if count_planner == 20:
             print('==================== FINISH COLLECTING DEMONSTRATIONS ====================')
             break
     # import ipdb; ipdb.set_trace()
@@ -381,7 +377,7 @@ def main(args):
                 L.log('train/episode_reward', episode_reward, step)
  
             obs = env.reset()
-            # picker_state = utils.get_picker_state()
+            picker_state = utils.get_picker_state()
             done = False
             ep_info = []
             episode_reward = 0
@@ -395,21 +391,19 @@ def main(args):
             action = env.action_space.sample()
         else:
             with utils.eval_mode(agent):
-                action = agent.sample_action(obs)
-                # action = agent.sample_action(obs, picker_state)
+                action = agent.sample_action(obs, picker_state)
 
         # run training update
         if step >= args.init_steps:
             agent.update(replay_buffer, L, step)
         next_obs, reward, done, info = env.step(action)
-        # next_picker_state = utils.get_picker_state()
+        next_picker_state = utils.get_picker_state()
         # allow infinit bootstrap
         ep_info.append(info)
         episode_reward += reward
-        replay_buffer.add(obs, action, reward, next_obs, float(done))
-        # replay_buffer.add(obs, action, reward, next_obs, done_bool, picker_state, next_picker_state)
+        replay_buffer.add(obs, action, reward, next_obs, float(done), picker_state, next_picker_state)
         if episode_step + 1 == env.horizon:
             done = True
         obs = next_obs
-        # picker_state = next_picker_state
+        picker_state = next_picker_state
         episode_step += 1

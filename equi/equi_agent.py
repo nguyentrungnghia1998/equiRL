@@ -314,29 +314,29 @@ class SacAgent(object):
         self.alpha_fixed = alpha_fixed
         
         # build equivariant actor model
-        self.actor = ActorEquivariant(
+        # self.actor = ActorEquivariant(
+            # obs_shape, action_shape, hidden_dim, 'pixel-equivariant',
+            # encoder_feature_dim, actor_log_std_min, actor_log_std_max,
+            # num_layers, num_filters, num_rotations).to(device)
+        self.actor = ActorEquivariant_1(
             obs_shape, action_shape, hidden_dim, 'pixel-equivariant',
             encoder_feature_dim, actor_log_std_min, actor_log_std_max,
             num_layers, num_filters, num_rotations).to(device)
-        # self.actor = ActorEquivariant_1(
-        #     obs_shape, action_shape, hidden_dim, 'pixel-equivariant',
-        #     encoder_feature_dim, actor_log_std_min, actor_log_std_max,
-        #     num_layers, num_filters, num_rotations).to(device)
 
         # build equivariant critic model
-        self.critic = CriticEquivariant(
+        # self.critic = CriticEquivariant(
+            # obs_shape, action_shape, hidden_dim, 'pixel-equivariant',
+            # encoder_feature_dim, num_layers, num_filters, num_rotations).to(device)
+        self.critic = CriticEquivariant_1(
             obs_shape, action_shape, hidden_dim, 'pixel-equivariant',
             encoder_feature_dim, num_layers, num_filters, num_rotations).to(device)
-        # self.critic = CriticEquivariant_1(
-        #     obs_shape, action_shape, hidden_dim, 'pixel-equivariant',
-        #     encoder_feature_dim, num_layers, num_filters, num_rotations).to(device)
         # build equivariant target critic model
-        self.critic_target = CriticEquivariant(
+        # self.critic_target = CriticEquivariant(
+            # obs_shape, action_shape, hidden_dim, 'pixel-equivariant',
+            # encoder_feature_dim, num_layers, num_filters, num_rotations).to(device)
+        self.critic_target = CriticEquivariant_1(
             obs_shape, action_shape, hidden_dim, 'pixel-equivariant',
             encoder_feature_dim, num_layers, num_filters, num_rotations).to(device)
-        # self.critic_target = CriticEquivariant_1(
-        #     obs_shape, action_shape, hidden_dim, 'pixel-equivariant',
-        #     encoder_feature_dim, num_layers, num_filters, num_rotations).to(device)
 
 
         # copy critic parameters to critic target
@@ -379,49 +379,29 @@ class SacAgent(object):
     @property
     def alpha(self):
         return self.log_alpha.exp()
-    # def select_action(self, obs, picker_state):
-        # with torch.no_grad():
-            # if not isinstance(obs, torch.Tensor):
-                # obs = torch.from_numpy(obs)
-            # obs = obs.to(torch.float32).to(self.device)
-            # obs = obs.unsqueeze(0)
-            # if not isinstance(picker_state, torch.Tensor):
-                # picker_state = torch.from_numpy(picker_state)
-            # picker_state = picker_state.to(torch.float32).to(self.device)
-            # picker_state = picker_state.unsqueeze(0)
-# 
-            # mu, _, _, _ = self.actor(obs, picker_state, compute_pi=False, compute_log_pi=False)
-            # return mu.cpu().data.numpy().flatten()
-
-    def select_action(self, obs):
+        
+    def select_action(self, obs, picker_state):
         with torch.no_grad():
             if not isinstance(obs, torch.Tensor):
                 obs = torch.from_numpy(obs)
             obs = obs.to(torch.float32).to(self.device)
             obs = obs.unsqueeze(0)
-            mu, _, _, _ = self.actor(obs, compute_pi=False, compute_log_pi=False)
+            # picker_state = picker_state.to(torch.float32).to(self.device)
+            # picker_state = picker_state.unsqueeze(0)
+
+            mu, _, _, _ = self.actor(obs, picker_state, compute_pi=False, compute_log_pi=False)
             return mu.cpu().data.numpy().flatten()
 
-    # def sample_action(self, obs, picker_state):
-        # if obs.shape[0] == 1:
-            # obs = obs[0]
-        # if picker_state.shape[0] == 1:
-            # picker_state = picker_state[0]
-# 
+    # def select_action(self, obs):
         # with torch.no_grad():
             # if not isinstance(obs, torch.Tensor):
                 # obs = torch.from_numpy(obs)
             # obs = obs.to(torch.float32).to(self.device)
             # obs = obs.unsqueeze(0)
-            # if not isinstance(picker_state, torch.Tensor):
-                # picker_state = torch.from_numpy(picker_state)
-            # picker_state = picker_state.to(torch.float32).to(self.device)
-            # picker_state = picker_state.unsqueeze(0)
-# 
-            # _, pi, _, _ = self.actor(obs, picker_state, compute_log_pi=False)
-            # return pi.cpu().data.numpy().flatten()
+            # mu, _, _, _ = self.actor(obs, compute_pi=False, compute_log_pi=False)
+            # return mu.cpu().data.numpy().flatten()
 
-    def sample_action(self, obs):     
+    def sample_action(self, obs, picker_state):
         if obs.shape[0] == 1:
             obs = obs[0]
 
@@ -430,21 +410,59 @@ class SacAgent(object):
                 obs = torch.from_numpy(obs)
             obs = obs.to(torch.float32).to(self.device)
             obs = obs.unsqueeze(0)
-            _, pi, _, _ = self.actor(obs, compute_log_pi=False)
+            # if not isinstance(picker_state, torch.Tensor):
+            #     picker_state = torch.from_numpy(picker_state)
+            # picker_state = picker_state.to(torch.float32).to(self.device)
+            # picker_state = picker_state.unsqueeze(0)
+
+            _, pi, _, _ = self.actor(obs, picker_state, compute_log_pi=False)
             return pi.cpu().data.numpy().flatten()
 
-    def update_critic(self, obs, action, reward, next_obs, not_done, L, step):
-        # import ipdb;ipdb.set_trace()
+    # def sample_action(self, obs):     
+        # if obs.shape[0] == 1:
+            # obs = obs[0]
+        # with torch.no_grad():
+            # if not isinstance(obs, torch.Tensor):
+                # obs = torch.from_numpy(obs)
+            # obs = obs.to(torch.float32).to(self.device)
+            # obs = obs.unsqueeze(0)
+            # _, pi, _, _ = self.actor(obs, compute_log_pi=False)
+            # return pi.cpu().data.numpy().flatten()
+
+    # def update_critic(self, obs, action, reward, next_obs, not_done, L, step):
+        # with torch.no_grad():
+            # _, policy_action, log_pi, _ = self.actor(next_obs)
+            # target_Q1, target_Q2 = self.critic_target(next_obs, policy_action)
+            # target_V = torch.min(target_Q1, target_Q2) - self.alpha.detach() * log_pi
+            # target_Q = reward + (not_done * self.discount * target_V)
+ 
+        # get current Q estimates
+        # current_Q1, current_Q2 = self.critic(obs, action, detach_encoder=self.detach_encoder)
+        # critic_loss = F.mse_loss(current_Q1,target_Q) + F.mse_loss(current_Q2, target_Q)
+        # if step % self.log_interval == 0:
+            # L.log('train_critic/loss', critic_loss, step)
+            # if self.args.wandb:
+                # wandb.log({'train_critic_loss': critic_loss}, step=step)
+
+        # Optimize the critic
+        # self.critic_optimizer.zero_grad()
+        # critic_loss.backward()
+        # self.critic_optimizer.step()
+# 
+        # if self.args.lr_decay is not None:
+            # self.critic_lr_scheduler.step()
+            # L.log('train/critic_lr', self.critic_optimizer.param_groups[0]['lr'], step)
+
+    def update_critic(self, obs, picker_state, action, reward, next_obs, next_picker_state, not_done, L, step):
         with torch.no_grad():
-            _, policy_action, log_pi, _ = self.actor(next_obs)
-            target_Q1, target_Q2 = self.critic_target(next_obs, policy_action)
+            _, policy_action, log_pi, _ = self.actor(next_obs, next_picker_state)
+            target_Q1, target_Q2 = self.critic_target(next_obs, next_picker_state, policy_action)
             target_V = torch.min(target_Q1, target_Q2) - self.alpha.detach() * log_pi
             target_Q = reward + (not_done * self.discount * target_V)
 
         # get current Q estimates
-        current_Q1, current_Q2 = self.critic(obs, action, detach_encoder=self.detach_encoder)
+        current_Q1, current_Q2 = self.critic(obs, picker_state, action, detach_encoder=self.detach_encoder)
         critic_loss = F.mse_loss(current_Q1,target_Q) + F.mse_loss(current_Q2, target_Q)
-        # print("critic loss", critic_loss)
         if step % self.log_interval == 0:
             L.log('train_critic/loss', critic_loss, step)
             if self.args.wandb:
@@ -459,71 +477,10 @@ class SacAgent(object):
             self.critic_lr_scheduler.step()
             L.log('train/critic_lr', self.critic_optimizer.param_groups[0]['lr'], step)
 
-    # def update_critic(self, obs, action, reward, next_obs, not_done, picker_state, next_picker_state, L, step):
-        # with torch.no_grad():
-            # _, policy_action, log_pi, _ = self.actor(next_obs, next_picker_state)
-            # target_Q1, target_Q2 = self.critic_target(next_obs, next_picker_state, policy_action)
-            # target_V = torch.min(target_Q1, target_Q2) - self.alpha.detach() * log_pi
-            # target_Q = reward + (not_done * self.discount * target_V)
 # 
-        # get current Q estimates
-        # current_Q1, current_Q2 = self.critic(obs, picker_state, action, detach_encoder=self.detach_encoder)
-        # critic_loss = F.mse_loss(current_Q1,target_Q) + F.mse_loss(current_Q2, target_Q)
-        # if step % self.log_interval == 0:
-            # L.log('train_critic/loss', critic_loss, step)
-            # if self.args.wandb:
-                # wandb.log({'train_critic_loss': critic_loss}, step=step)
-# 
-        # Optimize the critic
-        # self.critic_optimizer.zero_grad()
-        # critic_loss.backward()
-        # self.critic_optimizer.step()
-# 
-        # if self.args.lr_decay is not None:
-            # self.critic_lr_scheduler.step()
-            # L.log('train/critic_lr', self.critic_optimizer.param_groups[0]['lr'], step)
-# 
-
-    def update_actor_and_alpha(self, obs, L, step):
-        # import ipdb; ipdb.set_trace()
-        _, pi, log_pi, log_std = self.actor(obs)
-        actor_Q1, actor_Q2 = self.critic(obs, pi)
-
-        actor_Q = torch.min(actor_Q1, actor_Q2)
-        actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
-        # print("actor loss", actor_loss)
-
-        if step % self.log_interval == 0:
-            L.log('train_actor/loss', actor_loss, step)
-            if self.args.wandb:
-                wandb.log({'train_actor_loss': actor_loss}, step=step)
-        # entropy = 0.5 * log_std.shape[1] * (1.0 + np.log(2 * np.pi)) + log_std.sum(dim=-1)
-
-        # optimize the actor
-        self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        self.actor_optimizer.step()
-
-        if self.args.lr_decay is not None:
-            self.actor_lr_scheduler.step()
-            L.log('train/actor_lr', self.actor_optimizer.param_groups[0]['lr'], step)
-
-        if not self.alpha_fixed:
-            self.log_alpha_optimizer.zero_grad()
-            alpha_loss = (self.alpha * (-log_pi - self.target_entropy).detach()).mean()
-            if step % self.log_interval == 0:
-                L.log('train_alpha/loss', alpha_loss, step)
-                L.log('train_alpha/value', self.alpha, step)
-                if self.args.wandb:
-                    wandb.log({'train_alpha_loss': alpha_loss}, step=step)
-                    wandb.log({'train_alpha_value': self.alpha}, step=step)
-            alpha_loss.backward()
-            self.log_alpha_optimizer.step()
-    
-    # def update_actor_and_alpha(self, obs, picker_state, L, step):
-        # detach encoder, so we don't update it with the actor loss
-        # _, pi, log_pi, log_std = self.actor(obs, picker_state)
-        # actor_Q1, actor_Q2 = self.critic(obs, picker_state, pi)
+    # def update_actor_and_alpha(self, obs, L, step):
+        # _, pi, log_pi, log_std = self.actor(obs)
+        # actor_Q1, actor_Q2 = self.critic(obs, pi)
 # 
         # actor_Q = torch.min(actor_Q1, actor_Q2)
         # actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
@@ -532,6 +489,7 @@ class SacAgent(object):
             # L.log('train_actor/loss', actor_loss, step)
             # if self.args.wandb:
                 # wandb.log({'train_actor_loss': actor_loss}, step=step)
+        # entropy = 0.5 * log_std.shape[1] * (1.0 + np.log(2 * np.pi)) + log_std.sum(dim=-1)
 # 
         # optimize the actor
         # self.actor_optimizer.zero_grad()
@@ -553,11 +511,45 @@ class SacAgent(object):
                     # wandb.log({'train_alpha_value': self.alpha}, step=step)
             # alpha_loss.backward()
             # self.log_alpha_optimizer.step()
+    # 
+    def update_actor_and_alpha(self, obs, picker_state, L, step):
+        # detach encoder, so we don't update it with the actor loss
+        _, pi, log_pi, log_std = self.actor(obs, picker_state)
+        actor_Q1, actor_Q2 = self.critic(obs, picker_state, pi)
 
+        actor_Q = torch.min(actor_Q1, actor_Q2)
+        actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
+
+        if step % self.log_interval == 0:
+            L.log('train_actor/loss', actor_loss, step)
+            if self.args.wandb:
+                wandb.log({'train_actor_loss': actor_loss}, step=step)
+
+        # optimize the actor
+        self.actor_optimizer.zero_grad()
+        actor_loss.backward()
+        self.actor_optimizer.step()
+
+        if self.args.lr_decay is not None:
+            self.actor_lr_scheduler.step()
+            L.log('train/actor_lr', self.actor_optimizer.param_groups[0]['lr'], step)
+
+        if not self.alpha_fixed:
+            self.log_alpha_optimizer.zero_grad()
+            alpha_loss = (self.alpha * (-log_pi - self.target_entropy).detach()).mean()
+            if step % self.log_interval == 0:
+                L.log('train_alpha/loss', alpha_loss, step)
+                L.log('train_alpha/value', self.alpha, step)
+                if self.args.wandb:
+                    wandb.log({'train_alpha_loss': alpha_loss}, step=step)
+                    wandb.log({'train_alpha_value': self.alpha}, step=step)
+            alpha_loss.backward()
+            self.log_alpha_optimizer.step()
+# 
     def update(self, replay_buffer, L, step):
         #sample from buffer
-        obs, action, reward, next_obs, not_done = replay_buffer.sample_proprio()
-        # obs, action, reward, next_obs, not_done, picker_state, next_picker_state = replay_buffer.sample_proprio()
+        # obs, action, reward, next_obs, not_done = replay_buffer.sample_proprio()
+        obs, picker_state, action, reward, next_obs, next_picker_state, not_done = replay_buffer.sample_proprio()
 
         if step % self.log_interval == 0:
             L.log('train/batch_reward', reward.mean(), step)
@@ -566,12 +558,12 @@ class SacAgent(object):
 
         #----Update----
         #Critic
-        self.update_critic(obs, action, reward, next_obs, not_done, L, step)
-        # self.update_critic(obs, action, reward, next_obs, not_done, picker_state, next_picker_state, L, step)
+        # self.update_critic(obs, action, reward, next_obs, not_done, L, step)
+        self.update_critic(obs, picker_state, action, reward, next_obs, next_picker_state, not_done, L, step)
         #Actor
         if step % self.actor_update_freq == 0: #default actor_update_freq = 2
-            self.update_actor_and_alpha(obs, L, step)
-            # self.update_actor(ons, picker_state, L, step)
+            # self.update_actor_and_alpha(obs, L, step)
+            self.update_actor(obs, picker_state, L, step)
         #soft update
         if step % self.critic_target_update_freq == 0:
             utils.soft_update_params(self.critic, self.critic_target, self.critic_tau)
