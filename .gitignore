@@ -26,3 +26,5 @@ softgym/PyFlex/bindings/examples/*/
 softgym/PyFlex/bindings/examples/*.gif
 
 softgym/build/
+
+.history/

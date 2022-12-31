@@ -103,37 +103,36 @@ def preprocess_obs(obs, bits=5):
 
 class ReplayBuffer(Dataset):
     """Buffer to store environment transitions."""
-    def __init__(self, obs_shape, action_shape, capacity, batch_size, device, image_size=84, transform=None):
+    def __init__(self, obs_shape, action_shape, capacity, batch_size, device, num_picker = 2, image_size=84, transform=None):
         self.capacity = capacity
         self.batch_size = batch_size
         self.device = device
         self.image_size = image_size
         self.transform = transform
+        self.num_picker = num_picker
         # the proprioceptive obs is stored as uint8
         obs_dtype = np.uint8
 
         self.obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
         self.next_obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
+        self.picker_states = np.empty((capacity, num_picker), dtype=np.uint8)
+        self.next_picker_states = np.empty((capacity, num_picker), dtype = np.uint8)
         self.actions = np.empty((capacity, *action_shape), dtype=np.float32)
         self.rewards = np.empty((capacity, 1), dtype=np.float32)
         self.not_dones = np.empty((capacity, 1), dtype=np.float32)
 
-        # self.picker_state = np.empty((capacity, 2), dtype=np.obs_dtype)
-        # self.next_picker_state = np.empty((capacity, 2), dtype=np.obs_dtype)
-
         self.idx = 0
         self.last_save = 0
         self.full = False
-    # def add(self, obs, action, reward, next_obs, done, picker_state, next_picker_state):
-    def add(self, obs, action, reward, next_obs, done):
 
+    def add(self, obs, picker_state, action, reward, next_obs, next_picker_state, done):
         np.copyto(self.obses[self.idx], obs)
         np.copyto(self.actions[self.idx], action)
         np.copyto(self.rewards[self.idx], reward)
         np.copyto(self.next_obses[self.idx], next_obs)
         np.copyto(self.not_dones[self.idx], not done)
-        # np.copyto(self.picker_state[self.idx], picker_state)
-        # np.copyto(self.next_picker_state[self.idx], next_picker_state)
+        np.copyto(self.picker_states[self.idx], picker_state)
+        np.copyto(self.next_picker_states[self.idx], next_picker_state)
 
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.full or self.idx == 0
@@ -154,11 +153,10 @@ class ReplayBuffer(Dataset):
             next_obses, device=self.device
         ).float()
         not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)
-        # picker_state = torch.as_tensor(self.picker_state[idxs], device=self.device)
-        # next_picker_state = torch.as_tensor(self.next_picker_state[idxs], device=self.device)
-        return obses, actions, rewards, next_obses, not_dones
-        # return obses, actions, rewards, next_obses, not_dones, picker_state, next_picker_state
-
+        picker_states = torch.as_tensor(self.picker_states[idxs], device=self.device).float()
+        next_picker_states = torch.as_tensor(self.next_picker_states[idxs], device=self.device).float()
+        
+        return obses, picker_states, actions, rewards, next_obses, next_picker_states, not_dones
 
     def sample_cpc(self):
 
@@ -186,10 +184,9 @@ class ReplayBuffer(Dataset):
         pos = torch.as_tensor(pos, device=self.device).float()
         cpc_kwargs = dict(obs_anchor=obses, obs_pos=pos,
                           time_anchor=None, time_pos=None)
-        # picker_state = torch.as_tensor(self.picker_state[idxs], device=self.device)
-        # next_picker_state = torch.as_tensor(self.next_picker_state[idxs], device=self.device)
-        return obses, actions, rewards, next_obses, not_dones, cpc_kwargs
-        # retunr obses, actions, rewards, next_obses, not_dones, cpc_kwargs, picker_state, next_picker_state
+        picker_states = torch.as_tensor(self.picker_states[idxs], device=self.device)
+        next_picker_states = torch.as_tensor(self.next_picker_states[idxs], device=self.device)
+        return obses, picker_states, actions, rewards, next_obses, next_picker_states, not_dones
 
     def save(self, save_dir):
         if self.idx == self.last_save:
@@ -200,9 +197,9 @@ class ReplayBuffer(Dataset):
             self.next_obses[self.last_save:self.idx],
             self.actions[self.last_save:self.idx],
             self.rewards[self.last_save:self.idx],
-            self.not_dones[self.last_save:self.idx]
-            # self.picker_state[self.last_save:self.idx]
-            # self.next_picker_state[self.last_save:self.idx]
+            self.not_dones[self.last_save:self.idx],
+            self.picker_states[self.last_save:self.idx],
+            self.next_picker_states[self.last_save:self.idx]
         ]
         self.last_save = self.idx
         torch.save(payload, path)
@@ -220,8 +217,8 @@ class ReplayBuffer(Dataset):
             self.actions[start:end] = payload[2]
             self.rewards[start:end] = payload[3]
             self.not_dones[start:end] = payload[4]
-            # self.picker_state[start:end] = payload[5]
-            # self.next_picker_state[start:end] = payload[6]
+            self.picker_states[start:end] = payload[5]
+            self.next_picker_states[start:end] = payload[6]
             self.idx = end
 
     def __getitem__(self, idx):
@@ -234,26 +231,25 @@ class ReplayBuffer(Dataset):
         reward = self.rewards[idx]
         next_obs = self.next_obses[idx]
         not_done = self.not_dones[idx]
-        # picker_state = self.picker_state[idx]
-        # next_picker_state = self.next_picker_state[idx]
+        picker_state = self.picker_states[idx]
+        next_picker_state = self.next_picker_states[idx]
 
         if self.transform:
             obs = self.transform(obs)
             next_obs = self.transform(next_obs)
 
-        return obs, action, reward, next_obs, not_done
-        # return obs, action, reward, next_obs, not_done, picker_state, next_picker_state
+        return obs, action, reward, next_obs, not_done, picker_state, next_picker_state
 
     def __len__(self):
         return self.capacity
 
 class ReplayBufferAugmented(ReplayBuffer):
-    def __init__(self, obs_shape, action_shape, capacity, batch_size, device, image_size=84, transform=None, aug_n=9):
-        super().__init__(obs_shape, action_shape, capacity, batch_size, device, image_size, transform)
+    def __init__(self, obs_shape, action_shape, capacity, batch_size, device, num_picker = 2, image_size=84, transform=None, aug_n=9):
+        super().__init__(obs_shape, action_shape, capacity, batch_size, device, num_picker, image_size, transform)
         self.aug_n = aug_n
     
-    def add(self, obs, action, reward, next_obs, done):
-        super().add(obs, action, reward, next_obs, done)
+    def add(self, obs, picker_state, action, reward, next_obs, next_picker_state, done):
+        super().add(obs, picker_state, action, reward, next_obs, next_picker_state, done)
         # os.makedirs('augmented', exist_ok=True)
         # plt.figure(figsize=(15, 15))
         # plt.subplot(self.aug_n+1, 6, 1)
@@ -276,26 +272,11 @@ class ReplayBufferAugmented(ReplayBuffer):
         # plt.colorbar()
         for i in range(self.aug_n):
             obs_, action_, reward_, next_obs_, done_ = augmentTransition(obs, action, reward, next_obs, done, DEFAULT_CONFIG['aug_type'])
-        #     plt.subplot(self.aug_n+1, 6, 6*i+7)
-        #     plt.imshow(obs_[0][0].numpy())
-        #     plt.colorbar()
-        #     plt.subplot(self.aug_n+1, 6, 6*i+8)
-        #     plt.imshow(obs_[0][1].numpy())
-        #     plt.colorbar()
-        #     plt.subplot(self.aug_n+1, 6, 6*i+9)
-        #     plt.imshow(obs_[0][2].numpy())
-        #     plt.colorbar()
-        #     plt.subplot(self.aug_n+1, 6, 6*i+10)
-        #     plt.imshow(next_obs_[0][0].numpy())
-        #     plt.colorbar()
-        #     plt.subplot(self.aug_n+1, 6, 6*i+11)
-        #     plt.imshow(next_obs_[0][1].numpy())
-        #     plt.colorbar()
-        #     plt.subplot(self.aug_n+1, 6, 6*i+12)
-        #     plt.imshow(next_obs_[0][2].numpy())
-        #     plt.colorbar()
-            super().add(obs_, action_, reward_, next_obs_, done_)
-        # plt.title(f'{np.mean(obs[0][1].numpy()), np.mean(obs[0][2].numpy()), np.mean(next_obs[0][1].numpy()), np.mean(next_obs[0][2].numpy())}')
+            # plt.subplot(self.aug_n+1, 2, 2*i+3)
+            # plt.imshow(obs_[0].numpy().transpose(1, 2, 0))
+            # plt.subplot(self.aug_n+1, 2, 2*i+4)
+            # plt.imshow(next_obs_[0].numpy().transpose(1, 2, 0))
+            super().add(obs_, picker_state, action_, reward_, next_obs_, next_picker_state ,done_)
         # plt.savefig(f'augmented/{self.idx}.png')
         # exit()
 
@@ -329,7 +310,6 @@ def augmentTransitionSE2(obs, action, reward, next_obs, done):
     return obs, action, reward, next_obs, done
     
 def augmentTransitionSO2(obs, action, reward, next_obs, done):
-    # import ipdb; ipdb.set_trace()
     dxy = action[::2].copy()
     dxy1, dxy2 = np.split(dxy, 2)
     obs, next_obs, dxy1, dxy2, transform_params = perturb(obs[0].numpy().copy(),
@@ -395,13 +375,10 @@ def perturb(current_image, next_image, dxy1, dxy2, set_theta_zero=False, set_tra
         if next_image is not None:
             next_image = affine_transform(next_image, np.linalg.inv(transform), mode='nearest', order=1)
     else:
-        # for i in range(current_image.shape[0]):
-        #     current_image[i, :, :] = affine_transform(current_image[i, :, :], np.linalg.inv(transform), mode='nearest', order=1)
-        #     if next_image is not None:
-        #         next_image[i, :, :] = affine_transform(next_image[i, :, :], np.linalg.inv(transform), mode='nearest', order=1)
-        current_image[0] = affine_transform(current_image[0], np.linalg.inv(transform), mode='nearest', order=1)
-        if next_image is not None:
-            next_image[0] = affine_transform(next_image[0], np.linalg.inv(transform), mode='nearest', order=1)
+        for i in range(current_image.shape[0]-2):
+            current_image[i, :, :] = affine_transform(current_image[i, :, :], np.linalg.inv(transform), mode='nearest', order=1)
+            if next_image is not None:
+                next_image[i, :, :] = affine_transform(next_image[i, :, :], np.linalg.inv(transform), mode='nearest', order=1)
     return current_image, next_image, rotated_dxy1, rotated_dxy2, transform_params
 
 
@@ -426,35 +403,6 @@ def get_image_transform(theta, trans, pivot=(0, 0)):
                           [np.sin(theta), np.cos(theta), trans[1]], 
                           [0., 0., 1.]])
     return np.dot(image_t_pivot, np.dot(transform, pivot_t_image))
-
-class FrameStack(gym.Wrapper):
-    def __init__(self, env, k):
-        gym.Wrapper.__init__(self, env)
-        self._k = k
-        self._frames = deque([], maxlen=k)
-        shp = env.observation_space.shape
-        self.observation_space = gym.spaces.Box(
-            low=0,
-            high=1,
-            shape=((shp[0] * k,) + shp[1:]),
-            dtype=env.observation_space.dtype
-        )
-        self._max_episode_steps = env._max_episode_steps
-
-    def reset(self):
-        obs = self.env.reset()
-        for _ in range(self._k):
-            self._frames.append(obs)
-        return self._get_obs()
-
-    def step(self, action):
-        obs, reward, done, info = self.env.step(action)
-        self._frames.append(obs)
-        return self._get_obs(), reward, done, info
-
-    def _get_obs(self):
-        assert len(self._frames) == self._k
-        return np.concatenate(list(self._frames), axis=0)
 
 
 def random_crop(imgs, output_size):
