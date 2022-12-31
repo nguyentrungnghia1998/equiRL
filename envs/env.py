@@ -96,7 +96,6 @@ class SoftGymEnv(object):
 
             if reward == 1.0:
                 done = True
-
             # if done:
             # print('t:', self.t, self.max_episode_length, done)
             if self.symbolic:
