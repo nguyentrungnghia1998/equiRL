@@ -7,7 +7,7 @@ reward_scales = {
     'ClothFlatten': 1.0,
     'ClothDrop': 50.0,
     'RopeFlatten': 50.0,
-}
+} # conda environment + work space
 
 clip_obs = {
     'PassWater': None,

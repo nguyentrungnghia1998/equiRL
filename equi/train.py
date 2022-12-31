@@ -16,7 +16,7 @@ from envs.env import Env
 
 from softgym.utils.visualization import save_numpy_as_gif, make_grid
 import matplotlib.pyplot as plt
-
+# Module not found
 from scipy.spatial import ConvexHull
 import wandb
 import gc
@@ -85,7 +85,7 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
         plt.figure()
         for i in range(num_episodes):
             obs = env.reset(eval_flag=True)
-            # picker_state = utils.get_picker_state()
+            picker_state = utils.get_picker_state()
             done = False
             episode_reward = 0
             ep_info = []
@@ -95,18 +95,18 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
                 if args.encoder_type == 'pixel':
                     if obs.shape[0] == 1:
                         obs = obs[0]
-                    # if picker_state.shape[0] == 1:
-                        # picker_state = picker_state[0]
+                    if picker_state.shape[0] == 1:
+                        picker_state = picker_state[0]
                     
                 with utils.eval_mode(agent):
                     if sample_stochastically:
-                        action = agent.sample_action(obs)
-                        # action = agent.sample_action(obs, picker_state)
+                        # action = agent.sample_action(obs)
+                        action = agent.sample_action(obs, picker_state)
                     else:
-                        action = agent.select_action(obs)
-                        # action = agent.select_action(obs, picker_state)
+                        # action = agent.select_action(obs)
+                        action = agent.select_action(obs, picker_state)
                 obs, reward, done, info = env.step(action)
-                # picker_state = utils.get_picker_state()
+                picker_state = utils.get_picker_state()
                 episode_reward += reward
                 ep_info.append(info)
                 frames.append(env.get_image(128, 128))
@@ -265,7 +265,7 @@ def main(args):
     count_planner = 0
     while True:
         obs = env.reset()
-        # picker_state = utils.get_picker_state(env)
+        picker_state = utils.get_picker_state(env)
         episode_step = 0
         frames = [env.get_image(128, 128)]
         while True:
@@ -275,15 +275,15 @@ def main(args):
                 print('[INFO] Cannot find boundary point!!!')
                 break
             # move to two choosen boundary points and pick them
-            pick_choosen = utils.pick_choosen_point(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer)
-            # pick_choosen = utils.pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, replay_buffer)
+            # pick_choosen = utils.pick_choosen_point(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer)
+            pick_choosen = utils.pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, replay_buffer)
             if pick_choosen is None:
                 count_planner += 1
                 break
             if pick_choosen == 1:
                 # release the cloth
-                release = utils.give_up_the_cloth(env, obs, episode_step, frames, replay_buffer)
-                # release = utils.give_up_the_cloth(env, obs, picker_state, episode_step, frames, replay_buffer)
+                # release = utils.give_up_the_cloth(env, obs, episode_step, frames, replay_buffer)
+                release = utils.give_up_the_cloth(env, obs, picker_state, episode_step, frames, replay_buffer)
                 if release is None:
                     count_planner += 1
                     break
@@ -294,23 +294,23 @@ def main(args):
             # choose fling primitive or pick&drag primitive
             if np.random.rand() < 0.5:
                 # fling primitive
-                fling = utils.fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer)
-                # fling = utils.fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, replay_buffer)
+                # fling = utils.fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer)
+                fling = utils.fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, replay_buffer)
                 if fling is None:
                     count_planner += 1
                     break
                 episode_step, obs = fling[0], fling[1]
             else:
                 # pick&drag primitive
-                pick_drag = utils.pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer)
-                # pick_drag = utils.pick_drag_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, replay_buffer)
+                # pick_drag = utils.pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, replay_buffer)
+                pick_drag = utils.pick_drag_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, replay_buffer)
                 if pick_drag is None:
                     count_planner += 1
                     break
                 episode_step, obs = pick_drag[0], pick_drag[1]
             # release the cloth
-            release = utils.give_up_the_cloth(env, obs, episode_step, frames, replay_buffer)
-            # release = utils.give_up_the_cloth(env, obs, picker_state, episode_step, frames, replay_buffer)
+            # release = utils.give_up_the_cloth(env, obs, episode_step, frames, replay_buffer)
+            release = utils.give_up_the_cloth(env, obs, picker_state, episode_step, frames, replay_buffer)
             if release is None:
                 count_planner += 1
                 break
