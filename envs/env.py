@@ -89,10 +89,13 @@ class SoftGymEnv(object):
         reward = 0
         for k in range(self.action_repeat):
             obs, reward_k, done, info = self._env.step(action, **kwargs)
+            if reward_k >= 1.0:
+                reward_k = 1.0
             reward += reward_k
             self.t += 1  # Increment internal timer
 
-            # done = done or self.t == self.max_episode_length
+            if reward == 1.0:
+                done = True
 
             # if done:
             # print('t:', self.t, self.max_episode_length, done)

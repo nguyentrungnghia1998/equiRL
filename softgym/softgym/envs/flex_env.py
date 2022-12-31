@@ -194,10 +194,6 @@ class FlexEnv(gym.Env):
         self.time_step += 1
 
         done = False
-        # if self.time_step >= self.horizon:
-        if reward >= 0.99:
-            # import ipdb; ipdb.set_trace()
-            done = True
         if record_continuous_video:
             info['flex_env_recorded_frames'] = frames
         return obs, reward, done, info

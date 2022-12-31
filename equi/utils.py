@@ -557,7 +557,7 @@ def choose_random_particle_from_boundary(env):
         return np.array([choosen_id[1], choosen_id[0]])
     return choosen_id
 
-def pick_choosen_point(env, obs, choosen_id, thresh, episode_step, frames, expert_data, max_step=10):
+def pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data, max_step=10):
     count_pick_bound = 0
     while True:
         picker_pos, particle_pos = env.action_tool._get_pos()
@@ -565,39 +565,39 @@ def pick_choosen_point(env, obs, choosen_id, thresh, episode_step, frames, exper
         dis = target_pos - picker_pos
         norm = np.linalg.norm(dis, axis=1)
         action = np.clip(dis, -0.08, 0.08) / 0.08
-        # import ipdb; ipdb.set_trace()
         if (norm <= thresh).all():
             action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         else:
-            try:
-                action = np.concatenate([action, np.zeros((2, 1))], axis=1).reshape(-1)
-            except:
-                import ipdb; ipdb.set_trace()
+            action = np.concatenate([action, np.zeros((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
-        expert_data.append([obs, action, reward, next_obs, done])
+        next_picker_state = get_picker_state(env)
+        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
         frames.append(env.get_image(128, 128))
-        obs = next_obs
         episode_step += 1
         count_pick_bound += 1
+        obs = next_obs
+        picker_state = next_picker_state
         if done:
             return 1
         if episode_step == env.horizon or count_pick_bound >= max_step:
             return None
-        if all(i != None for i in env.action_tool.picked_particles) and len(set(particle_pos[env.action_tool.picked_particles, 3])) == 1:
-            return [episode_step, obs]
+        if np.all(picker_state == 1) and len(set(particle_pos[env.action_tool.picked_particles, 3])) == 1:
+            return [episode_step, obs, picker_state]
 
-def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, expert_data, max_step=10):
+def fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data, max_step=10):
     # fling primitive
-    # first, move to the cloth up to the ground
+    # first, move to the cloth up to the ground and down into a particle touch the ground
     count_move_height = 0
     while True:
         action = np.array([0, 1, 0, 1, 0, 1, 0, 1])
         next_obs, reward, done, info = env.step(action)
-        expert_data.append([obs, action, reward, next_obs, done])
+        next_picker_state = get_picker_state(env)
+        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
         frames.append(env.get_image(128, 128))
         episode_step += 1
-        obs = next_obs
         count_move_height += 1
+        obs = next_obs
+        picker_state = next_picker_state
         if done:
             return 1
         if episode_step == env.horizon:
@@ -611,11 +611,13 @@ def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, expert_d
             break
         action = np.array([0, -0.2, 0, 1, 0, -0.2, 0, 1])
         next_obs, reward, done, info = env.step(action)
-        expert_data.append([obs, action, reward, next_obs, done])
+        next_picker_state = get_picker_state(env)
+        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
         frames.append(env.get_image(128, 128))
         episode_step += 1
-        obs = next_obs
         count_move_height_back += 1
+        obs = next_obs
+        picker_state = next_picker_state
         if done:
             return 1
         if episode_step == env.horizon:
@@ -648,11 +650,13 @@ def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, expert_d
         action = np.clip(dis, -0.08, 0.08) / 0.08
         action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
-        expert_data.append([obs, action, reward, next_obs, done])
+        next_picker_state = get_picker_state(env)
+        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
         frames.append(env.get_image(128, 128))
         episode_step += 1
-        obs = next_obs
         count_stretch += 1
+        obs = next_obs
+        picker_state = next_picker_state
         if done:
             return 1
         if episode_step == env.horizon:
@@ -673,35 +677,39 @@ def fling_primitive(env, obs, choosen_id, thresh, episode_step, frames, expert_d
     dy = 1 / np.sqrt(1 + k**2)
     dx = k / np.sqrt(1 + k**2)
     for i in range(8):
-        m = np.exp(-i)
+        m = np.exp(-i/2)
         action = np.array([dx*m, m, dy*m, 1.0, dx*m, m, dy*m, 1.0])
         next_obs, reward, done, info = env.step(action)
-        expert_data.append([obs, action, reward, next_obs, done])
+        next_picker_state = get_picker_state(env)
+        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
+        picker_state = next_picker_state
         if done:
             return 1
         if episode_step == env.horizon:
             return None
     # fourth, move back the cloth to the ground
-    for i in range(20):
-        if (env.action_tool._get_pos()[0][:, 1] <= thresh).all():
+    for i in range(15):
+        if np.allclose(abs(env.action_tool._get_pos()[0][0, 2]), 0.6, atol=env.action_tool.picker_radius):
             break
-        m = np.exp(-i/20)
+        m = np.exp(-i/10)
         action = np.array([-dx*m, -m, -dy*m, 1.0, -dx*m, -m, -dy*m, 1.0])
         next_obs, reward, done, info = env.step(action)
-        expert_data.append([obs, action, reward, next_obs, done])
+        next_picker_state = get_picker_state(env)
+        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
+        picker_state = next_picker_state
         if done:
             return 1
         if episode_step == env.horizon:
             return None
-    return [episode_step, obs]
+    return [episode_step, obs, picker_state]
 
-def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, expert_data, max_step=10):
+def pick_drag_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data, max_step=10):
     # move to picker to the height 0.1
     curr_pos = env.action_tool._get_pos()[0]
     curr_pos[:, 1] = 0.1
@@ -712,10 +720,12 @@ def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, expe
         action = np.clip(dis, -0.08, 0.08) / 0.08
         action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
-        expert_data.append([obs, action, reward, next_obs, done])
+        next_picker_state = get_picker_state(env)
+        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
+        picker_state = next_picker_state
         if done:
             return 1
         if episode_step == env.horizon:
@@ -749,11 +759,13 @@ def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, expe
         action = np.clip(dis, -0.08, 0.08) / 0.08
         action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
-        expert_data.append([obs, action, reward, next_obs, done])
+        next_picker_state = get_picker_state(env)
+        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
         frames.append(env.get_image(128, 128))
         episode_step += 1
-        obs = next_obs
         count_stretch += 1
+        obs = next_obs
+        picker_state = next_picker_state
         if done:
             return 1
         if episode_step == env.horizon:
@@ -777,42 +789,33 @@ def pick_drag_primitive(env, obs, choosen_id, thresh, episode_step, frames, expe
     if k*(particle_mean[0] - curr_pos[right, 0]) + (particle_mean[2]-curr_pos[right, 2]) >= 0:
         dx = -dx
         dy = -dy
-    for i in range(8):
-        m = np.exp(-i/8)
-        # m = 1
-        action = np.array([dx*m, 0, dy*m, 1.0, dx*m, 0, dy*m, 1.0])
-        next_obs, reward, done, info = env.step(action)
-        expert_data.append([obs, action, reward, next_obs, done])
-        frames.append(env.get_image(128, 128))
-        episode_step += 1
-        obs = next_obs
-        if done:
-            return 1
-        if episode_step == env.horizon:
-            return None
-    # move the picker down
-    while True:
-        if (env.action_tool._get_pos()[0][:, 1] <= thresh).all():
+    for i in range(6):
+        if np.allclose(abs(env.action_tool._get_pos()[0][0, 2]), 0.6, atol=env.action_tool.picker_radius):
             break
-        action = np.array([0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 0.0, 1.0])
+        m = np.exp(-i/2)
+        action = np.array([dx*m, -m, dy*m, 1.0, dx*m, -m, dy*m, 1.0])
         next_obs, reward, done, info = env.step(action)
-        expert_data.append([obs, action, reward, next_obs, done])
+        next_picker_state = get_picker_state(env)
+        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
+        picker_state = next_picker_state
         if done:
             return 1
         if episode_step == env.horizon:
             return None
-    return [episode_step, obs]
+    return [episode_step, obs, picker_state]
 
-def give_up_the_cloth(env, obs, episode_step, frames, expert_data):
+def give_up_the_cloth(env, obs, picker_state, episode_step, frames, expert_data):
     action = np.zeros(8)
     next_obs, reward, done, info = env.step(action)
-    expert_data.append([obs, action, reward, next_obs, done])
+    next_picker_state = get_picker_state(env)
+    expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
     frames.append(env.get_image(128, 128))
     episode_step += 1
     obs = next_obs
+    picker_state = next_picker_state
     if done:
         return 1
     if episode_step == env.horizon:
@@ -822,15 +825,17 @@ def give_up_the_cloth(env, obs, episode_step, frames, expert_data):
     for _ in range(2):
         action = np.array([0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
         next_obs, reward, done, info = env.step(action)
-        expert_data.append([obs, action, reward, next_obs, done])
+        next_picker_state = get_picker_state(env)
+        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
         frames.append(env.get_image(128, 128))
         episode_step += 1
         obs = next_obs
+        picker_state = next_picker_state
         if done:
             return 1
         if episode_step == env.horizon:
             return None
-    return [episode_step, obs]
+    return [episode_step, obs, picker_state]
 
 def get_picker_state(env):
     picker_state = []
