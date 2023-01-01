@@ -238,7 +238,7 @@ class ReplayBuffer(Dataset):
             obs = self.transform(obs)
             next_obs = self.transform(next_obs)
 
-        return obs, action, reward, next_obs, not_done, picker_state, next_picker_state
+        return obs, picker_state, action, reward, next_obs, next_picker_state, not_done
 
     def __len__(self):
         return self.capacity
@@ -252,30 +252,17 @@ class ReplayBufferAugmented(ReplayBuffer):
         super().add(obs, picker_state, action, reward, next_obs, next_picker_state, done)
         # os.makedirs('augmented', exist_ok=True)
         # plt.figure(figsize=(15, 15))
-        # plt.subplot(self.aug_n+1, 6, 1)
-        # plt.imshow(obs[0][0].numpy())
-        # plt.colorbar()
-        # plt.subplot(self.aug_n+1, 6, 2)
-        # plt.imshow(obs[0][1].numpy())
-        # plt.colorbar()
-        # plt.subplot(self.aug_n+1, 6, 3)
-        # plt.imshow(obs[0][2].numpy())
-        # plt.colorbar()
-        # plt.subplot(self.aug_n+1, 6, 4)
-        # plt.imshow(next_obs[0][0].numpy())
-        # plt.colorbar()
-        # plt.subplot(self.aug_n+1, 6, 5)
-        # plt.imshow(next_obs[0][1].numpy())
-        # plt.colorbar()
-        # plt.subplot(self.aug_n+1, 6, 6)
-        # plt.imshow(next_obs[0][2].numpy())
-        # plt.colorbar()
+        # plt.subplot(self.aug_n+1, 2, 1)
+        # plt.imshow(obs[0].numpy().transpose(1, 2, 0))
+        # plt.subplot(self.aug_n+1, 2, 2)
+        # plt.imshow(next_obs[0].numpy().transpose(1, 2, 0))
+
         for i in range(self.aug_n):
             obs_, action_, reward_, next_obs_, done_ = augmentTransition(obs, action, reward, next_obs, done, DEFAULT_CONFIG['aug_type'])
             # plt.subplot(self.aug_n+1, 2, 2*i+3)
             # plt.imshow(obs_[0].numpy().transpose(1, 2, 0))
             # plt.subplot(self.aug_n+1, 2, 2*i+4)
-            # plt.imshow(next_obs_[0].numpy().transpose(1, 2, 0))
+            # plt.imshow(next_obs_[0].numpy().transpose(1, 2, 0))    
             super().add(obs_, picker_state, action_, reward_, next_obs_, next_picker_state ,done_)
         # plt.savefig(f'augmented/{self.idx}.png')
         # exit()
@@ -368,17 +355,19 @@ def perturb(current_image, next_image, dxy1, dxy2, set_theta_zero=False, set_tra
     
     rotated_dxy2 = rot.dot(dxy2)
     rotated_dxy2 = np.clip(rotated_dxy2, -1, 1)
-
+    # import ipdb; ipdb.set_trace()
     # Apply rigid transform to image and pixel labels.
     if current_image.shape[0] == 1:
-        current_image = affine_transform(current_image, np.linalg.inv(transform), mode='nearest', order=1)
+        current_image = affine_transform(current_image[0], np.linalg.inv(transform), mode='nearest', order=1).reshape(current_image.shape)
         if next_image is not None:
-            next_image = affine_transform(next_image, np.linalg.inv(transform), mode='nearest', order=1)
+            next_image = affine_transform(next_image[0], np.linalg.inv(transform), mode='nearest', order=1).reshape(next_image.shape)
     else:
-        for i in range(current_image.shape[0]-2):
+        for i in range(current_image.shape[0]):
             current_image[i, :, :] = affine_transform(current_image[i, :, :], np.linalg.inv(transform), mode='nearest', order=1)
             if next_image is not None:
                 next_image[i, :, :] = affine_transform(next_image[i, :, :], np.linalg.inv(transform), mode='nearest', order=1)
+            if i >= 3:
+                break
     return current_image, next_image, rotated_dxy1, rotated_dxy2, transform_params
 
 
@@ -465,7 +454,6 @@ def choose_random_particle_from_boundary(env):
         corner.append((corner_point_lower_left, corner_point_lower_right))
     if len(corner) > 0:
         choosen_id = np.array(random.sample(corner, 1)[0])
-        print(f'2 corners {choosen_id}')
     else:
         single_corner = []
         if corner_point_upper_left in bound_id:
@@ -485,7 +473,6 @@ def choose_random_particle_from_boundary(env):
                 count_single_id += 1
                 if _id_1 != _id_2 and np.linalg.norm(particle_pos[_id_1, [0, 2]] - particle_pos[_id_2, [0, 2]]) >=  6 * env.action_tool.picker_radius:
                     choosen_id = np.array([_id_1[0], _id_2[0]])
-                    print(f'1 corner {choosen_id}')
                     break
                 if count_single_id > 20:
                     return None
@@ -496,7 +483,6 @@ def choose_random_particle_from_boundary(env):
                 choosen_id = random.sample(bound_id, 2)
                 count_choose_id += 1
                 if np.linalg.norm(particle_pos[choosen_id[0], [0, 2]] - particle_pos[choosen_id[1], [0, 2]]) >=  6 * env.action_tool.picker_radius:
-                    print(f'0 corner {choosen_id}')
                     break
                 if count_choose_id > 20:
                     return None

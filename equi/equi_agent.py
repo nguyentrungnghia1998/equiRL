@@ -386,8 +386,10 @@ class SacAgent(object):
                 obs = torch.from_numpy(obs)
             obs = obs.to(torch.float32).to(self.device)
             obs = obs.unsqueeze(0)
-            # picker_state = picker_state.to(torch.float32).to(self.device)
-            # picker_state = picker_state.unsqueeze(0)
+            if not isinstance(picker_state, torch.Tensor):
+                picker_state = torch.from_numpy(picker_state)
+            picker_state = picker_state.to(torch.float32).to(self.device)
+            picker_state = picker_state.unsqueeze(0)
 
             mu, _, _, _ = self.actor(obs, picker_state, compute_pi=False, compute_log_pi=False)
             return mu.cpu().data.numpy().flatten()
@@ -410,10 +412,10 @@ class SacAgent(object):
                 obs = torch.from_numpy(obs)
             obs = obs.to(torch.float32).to(self.device)
             obs = obs.unsqueeze(0)
-            # if not isinstance(picker_state, torch.Tensor):
-            #     picker_state = torch.from_numpy(picker_state)
-            # picker_state = picker_state.to(torch.float32).to(self.device)
-            # picker_state = picker_state.unsqueeze(0)
+            if not isinstance(picker_state, torch.Tensor):
+                picker_state = torch.from_numpy(picker_state)
+            picker_state = picker_state.to(torch.float32).to(self.device)
+            picker_state = picker_state.unsqueeze(0)
 
             _, pi, _, _ = self.actor(obs, picker_state, compute_log_pi=False)
             return pi.cpu().data.numpy().flatten()
@@ -563,7 +565,7 @@ class SacAgent(object):
         #Actor
         if step % self.actor_update_freq == 0: #default actor_update_freq = 2
             # self.update_actor_and_alpha(obs, L, step)
-            self.update_actor(obs, picker_state, L, step)
+            self.update_actor_and_alpha(obs, picker_state, L, step)
         #soft update
         if step % self.critic_target_update_freq == 0:
             utils.soft_update_params(self.critic, self.critic_target, self.critic_tau)

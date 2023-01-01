@@ -85,7 +85,7 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
         plt.figure()
         for i in range(num_episodes):
             obs = env.reset(eval_flag=True)
-            picker_state = utils.get_picker_state()
+            picker_state = utils.get_picker_state(env)
             done = False
             episode_reward = 0
             ep_info = []
@@ -103,7 +103,7 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
                     else:
                         action = agent.select_action(obs, picker_state)
                 obs, reward, done, info = env.step(action)
-                picker_state = utils.get_picker_state()
+                picker_state = utils.get_picker_state(env)
                 episode_reward += reward
                 count += 1
                 ep_info.append(info)
@@ -328,19 +328,17 @@ def main(args):
         all_frames_planner.append(frames)
         all_expert_data_planner.append(expert_data)
         print('[INFO]Collected {} demonstrations'.format(count_planner))
-        if count_planner == 20:
+        if count_planner == args.num_demonstrations:
             print('==================== FINISH COLLECTING DEMONSTRATIONS ====================')
             break
-    # import ipdb; ipdb.set_trace()
-    re = []
+
     for i in all_expert_data_planner:
         for j in i:
             # obs, action, reward, next_obs, done, picker_state, picker_next_state
             # add to replay buffer
-            # import ipdb; ipdb.set_trace()
-            replay_buffer.add(j[0], j[1], j[2], j[3], j[4], j[5], j[6])
+            replay_buffer.add(j[0], j[5], j[1], j[2], j[3], j[6], j[4])
 
-    for i in range(1):
+    for i in range(args.num_demonstrations//20):
         sub_all_frames_planner = all_frames_planner[i*20:(i+1)*20] 
         sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
         sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in sub_all_frames_planner])
@@ -377,7 +375,7 @@ def main(args):
                 L.log('train/episode_reward', episode_reward, step)
  
             obs = env.reset()
-            picker_state = utils.get_picker_state()
+            picker_state = utils.get_picker_state(env)
             done = False
             ep_info = []
             episode_reward = 0
@@ -397,11 +395,11 @@ def main(args):
         if step >= args.init_steps:
             agent.update(replay_buffer, L, step)
         next_obs, reward, done, info = env.step(action)
-        next_picker_state = utils.get_picker_state()
+        next_picker_state = utils.get_picker_state(env)
         # allow infinit bootstrap
         ep_info.append(info)
         episode_reward += reward
-        replay_buffer.add(obs, action, reward, next_obs, float(done), picker_state, next_picker_state)
+        replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, float(done))
         if episode_step + 1 == env.horizon:
             done = True
         obs = next_obs
