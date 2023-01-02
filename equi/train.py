@@ -266,71 +266,70 @@ def main(args):
     thresh = env.cloth_particle_radius + env.action_tool.picker_radius + env.action_tool.picker_threshold
     count_planner = 0
     
-    while True:
-        obs = env.reset()
-        picker_state = utils.get_picker_state(env)
-        episode_step = 0
-        frames = [env.get_image(128, 128)]
-        expert_data = []
-        flag_reset = False
-        while True:
-            # choose random boundary point
-            choosen_id = utils.choose_random_particle_from_boundary(env)
-            if choosen_id is None:
-                print('[INFO] Cannot find boundary point!!!')
-                flag_reset = True
-                break
-            # move to two choosen boundary points and pick them
-            pick_choosen = utils.pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
-            if pick_choosen == 1:
-                count_planner += 1
-                break
-            if pick_choosen is None:
-                flag_reset = True
-                break
-            else:
-                episode_step, obs, picker_state = pick_choosen[0], pick_choosen[1], pick_choosen[2]
-            # Randomly choose primitive between fling and pick&drag
-            if np.random.rand() < 0.5:
-                # fling primitive
-                fling = utils.fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
-                if fling == 1:
-                    count_planner += 1
-                    break
-                if fling is None:
-                    flag_reset = True
-                    break
-                episode_step, obs, picker_state = fling[0], fling[1], fling[2]
-            else:
-                # pick&drag primitive
-                pick_drag = utils.pick_drag_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
-                if pick_drag == 1:
-                    count_planner += 1
-                    break
-                if pick_drag is None:
-                    flag_reset = True
-                    break
-                episode_step, obs, picker_state = pick_drag[0], pick_drag[1], pick_drag[2]
-            # release the cloth
-            release = utils.give_up_the_cloth(env, obs, picker_state, episode_step, frames, expert_data)
-            if release == 1:
-                count_planner += 1
-                break
-            if release is None:
-                flag_reset = True
-                break
-            episode_step, obs, picker_state = release[0], release[1], release[2]
-        if flag_reset:
-            continue
-        if len(frames) != 100:
-            for _ in range(100 - len(frames)):
-                frames.append(env.get_image(128, 128))
-        all_frames_planner.append(frames)
-        all_expert_data_planner.append(expert_data)
-        print('[INFO]Collected {} demonstrations'.format(count_planner))
-        if count_planner == args.num_demonstrations:
-            print('==================== FINISH COLLECTING DEMONSTRATIONS ====================')
-            break
+    # while True:
+    #     obs = env.reset()
+    #     picker_state = utils.get_picker_state(env)
+    #     episode_step = 0
+    #     frames = [env.get_image(128, 128)]
+    #     expert_data = []
+    #     flag_reset = False
+    #     while True:
+    #         # choose random boundary point
+    #         choosen_id = utils.choose_random_particle_from_boundary(env)
+    #         if choosen_id is None:
+    #             print('[INFO] Cannot find boundary point!!!')
+    #             flag_reset = True
+    #             break
+    #         # move to two choosen boundary points and pick them
+    #         pick_choosen = utils.pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
+    #         if pick_choosen == 1:
+    #             count_planner += 1
+    #             break
+    #         if pick_choosen is None:
+    #             break
+    #         else:
+    #             episode_step, obs, picker_state = pick_choosen[0], pick_choosen[1], pick_choosen[2]
+    #         # Randomly choose primitive between fling and pick&drag
+    #         if np.random.rand() < 0.5:
+    #             # fling primitive
+    #             fling = utils.fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
+    #             if fling == 1:
+    #                 count_planner += 1
+    #                 break
+    #             if fling is None:
+    #                 flag_reset = True
+    #                 break
+    #             episode_step, obs, picker_state = fling[0], fling[1], fling[2]
+    #         else:
+    #             # pick&drag primitive
+    #             pick_drag = utils.pick_drag_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
+    #             if pick_drag == 1:
+    #                 count_planner += 1
+    #                 break
+    #             if pick_drag is None:
+    #                 flag_reset = True
+    #                 break
+    #             episode_step, obs, picker_state = pick_drag[0], pick_drag[1], pick_drag[2]
+    #         # release the cloth
+    #         release = utils.give_up_the_cloth(env, obs, picker_state, episode_step, frames, expert_data)
+    #         if release == 1:
+    #             count_planner += 1
+    #             break
+    #         if release is None:
+    #             flag_reset = True
+    #             break
+    #         episode_step, obs, picker_state = release[0], release[1], release[2]
+    #     if flag_reset:
+    #         continue
+    #     if len(frames) != 100:
+    #         for _ in range(100 - len(frames)):
+    #             frames.append(env.get_image(128, 128))
+    #     all_frames_planner.append(frames)
+    #     all_expert_data_planner.append(expert_data)
+    #     print('[INFO]Collected {} demonstrations'.format(count_planner))
+    #     if count_planner == args.num_demonstrations:
+    #         print('==================== FINISH COLLECTING DEMONSTRATIONS ====================')
+    #         break
 
     for i in all_expert_data_planner:
         for j in i:
