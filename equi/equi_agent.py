@@ -343,7 +343,7 @@ class SacAgent(object):
         self.critic_target.load_state_dict(self.critic.state_dict())
 
         # Tie encoder between actor and critic
-        self.actor.encoder.load_state_dict(self.critic.encoder.state_dict())
+        # self.actor.encoder.load_state_dict(self.critic.encoder.state_dict())
         
         self.log_alpha = torch.tensor(np.log(init_temperature)).to(device)
         self.log_alpha.requires_grad = True

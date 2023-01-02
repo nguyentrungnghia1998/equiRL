@@ -110,7 +110,7 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
                 frames.append(env.get_image(128, 128))
                 rewards.append(reward)
                 if done:
-                    for i in range(env.horizon - count):
+                    for i in range(env.horizon + 1 - count):
                         frames.append(env.get_image(128, 128))
                 if count == env.horizon:
                     done = True
@@ -322,12 +322,12 @@ def main(args):
             episode_step, obs, picker_state = release[0], release[1], release[2]
         if flag_reset:
             continue
-        if len(frames) != 100:
-            for _ in range(100 - len(frames)):
+        if len(frames) != env.horizon + 1:
+            for _ in range(env.horizon + 1 - len(frames)):
                 frames.append(env.get_image(128, 128))
         all_frames_planner.append(frames)
         all_expert_data_planner.append(expert_data)
-        print('[INFO]Collected {} demonstrations'.format(count_planner))
+        print('[INFO]Collected {} demonstrations in {} steps'.format(count_planner, len(expert_data)))
         if count_planner == args.num_demonstrations:
             print('==================== FINISH COLLECTING DEMONSTRATIONS ====================')
             break
@@ -336,6 +336,7 @@ def main(args):
         for j in i:
             # obs, action, reward, next_obs, done, picker_state, picker_next_state
             # add to replay buffer
+            # print(f'obs shape {j[0].shape}, action shape {j[1].shape}, reward {j[2]}, next_obs shape {j[3].shape}, done {j[4]}, picker_state {j[5]}, picker_next_state {j[6]}')
             replay_buffer.add(j[0], j[5], j[1], j[2], j[3], j[6], j[4])
 
     for i in range(args.num_demonstrations//20):
@@ -343,7 +344,6 @@ def main(args):
         sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
         sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in sub_all_frames_planner])
         save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'expert_{}.gif'.format(i)))
-    # exit()
 
     episode, episode_reward, done, ep_info = 0, 0, True, []
     start_time = time.time()
@@ -400,8 +400,8 @@ def main(args):
         ep_info.append(info)
         episode_reward += reward
         replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, float(done))
-        if episode_step + 1 == env.horizon:
-            done = True
         obs = next_obs
         picker_state = next_picker_state
         episode_step += 1
+        if episode_step == env.horizon:
+            done = True

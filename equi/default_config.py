@@ -54,10 +54,10 @@ DEFAULT_CONFIG = {
     'aug_n': 4,
     'aug_type': 'so2',
     # equivariant
-    'num_rotations': 8,
+    'num_rotations': 4,
     # wandb
     'wandb': True,
-    'wandb_seed': 10,
+    'wandb_seed': 11,
     # expert
-    'num_demonstrations': 40
+    'num_demonstrations': 200
 }
