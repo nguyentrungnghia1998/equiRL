@@ -10,7 +10,7 @@ DEFAULT_CONFIG = {
     # train
     'agent': 'curl_sac',
     'init_steps': 1000,
-    'num_train_steps': 20000,
+    'num_train_steps': 400000,
     'batch_size': 128,  # This is 256 for other sac but experiments show that they don't matter much for curl_sac
     'hidden_dim': 1024,
     # eval

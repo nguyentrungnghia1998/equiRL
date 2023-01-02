@@ -87,6 +87,7 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
         plt.figure()
         for i in range(num_episodes):
             obs = env.reset(eval_flag=True)
+            picker_state = utils.get_picker_state(env)
             done = False
             episode_reward = 0
             ep_info = []
@@ -96,12 +97,12 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
                 # center crop image
                 if args.encoder_type == 'pixel':
                     obs = utils.center_crop_image(obs, args.image_size)
-                # with utils.eval_mode(agent):
-                #     if sample_stochastically:
-                #         action = agent.sample_action(obs)
-                #     else:
-                #         action = agent.select_action(obs)
-                action = np.array([1.0, 0.0, 0.0, 0.15, -1.0, 0.0, 0.0, 0.01])
+                with utils.eval_mode(agent):
+                    if sample_stochastically:
+                        action = agent.sample_action(obs,picker_state)
+                    else:
+                        action = agent.select_action(obs,picker_state)
+                # action = np.array([1.0, 0.0, 0.0, 0.15, -1.0, 0.0, 0.0, 0.01])
                 obs, reward, done, info = env.step(action)
                 episode_reward += reward
                 ep_info.append(info)
@@ -218,7 +219,7 @@ def main(args):
         else:
             n = 4
 
-        if args.env_kwargs['use_pick_old_state']:
+        if args.env_kwargs['use_picker_state']:
             n+=args.env_kwargs['num_picker']
         obs_shape = (n, args.image_size, args.image_size)
         pre_aug_obs_shape = (n, args.pre_transform_image_size, args.pre_transform_image_size)
