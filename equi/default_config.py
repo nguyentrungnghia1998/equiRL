@@ -8,8 +8,8 @@ DEFAULT_CONFIG = {
     # replay buffer
     'replay_buffer_capacity': 100000,
     # train
-    'agent': 'sac',
-    'init_steps': 1000,
+    'agent': 'sacfd',
+    'init_steps': 0,
     'num_train_steps': 2000000,
     'batch_size': 128,  # This is 256 for other sac but experiments show that they don't matter much for curl_sac
     'hidden_dim': 128,
@@ -56,8 +56,14 @@ DEFAULT_CONFIG = {
     # equivariant
     'num_rotations': 4,
     # wandb
-    'wandb': True,
-    'wandb_seed': 11,
+    'wandb': False,
+    'wandb_seed': 13,
     # expert
-    'num_demonstrations': 200
+    'num_demonstrations': 20,
+    # prioritized replay
+    'prioritized_replay': True,
+    'prioritized_replay_alpha': 0.6,
+    'per_beta': 0.4,
+    'per_eps': 1e-6,
+    'per_expert_eps': 1.0
 }
