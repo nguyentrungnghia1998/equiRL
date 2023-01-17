@@ -7,8 +7,8 @@ import copy
 
 from equi import utils
 from equi.logger import Logger
-
-from equi.equi_agent import SacAgent
+import escnn
+from equi.equi_agent import SacAgent, SACfD
 from equi.default_config import DEFAULT_CONFIG
 
 from chester import logger
@@ -20,6 +20,153 @@ import matplotlib.pyplot as plt
 from scipy.spatial import ConvexHull
 import wandb
 import gc
+
+def test_equi(message, obs, picker_state, action, agent):
+    act = agent.actor.act
+    if message == 'Test equivariant encoder':
+        # encoder = PixelEncoderEquivariant(obs_shape=obs_shape, feature_dim=feature_dim, N=N, num_filters=num_filters)
+        encoder = agent.actor.encoder
+        field = escnn.nn.FieldType(act, obs.shape[-2]*[act.trivial_repr])
+        y = encoder(escnn.nn.GeometricTensor(obs, field))
+        print('='*50)
+        print('Test equivariant encoder')
+        print('='*50)
+
+        x = field(obs)
+
+        for i, g in enumerate(act.testing_elements):
+            print(i, g)
+            # transform y by g
+            y_tr = y.transform(g)
+
+            # transform x by g
+            x_tr = x.transform(g).tensor
+            y_ = encoder(escnn.nn.GeometricTensor(x_tr, field))
+
+            print(y_.tensor.reshape(1, -1))
+            print(y_tr.tensor.reshape(1, -1))
+            assert torch.allclose(y_.tensor, y_tr.tensor, atol=1e-2)
+            print('OK')
+            print('-'*50)
+
+    elif message == 'Test equivariant actor':
+        print('='*50)
+        print('Test equivariant actor')
+        print('='*50)
+        # actor = ActorEquivariant(obs_shape=obs_shape, action_shape=(8,), hidden_dim=feature_dim, encoder_type='pixel-equivariant', encoder_feature_dim=feature_dim, log_std_min=-20, log_std_max=2, num_layers=1, num_filters=16, N=N)
+        actor = agent.actor
+        out, _, _, ls = actor(obs)
+        x = escnn.nn.FieldType(act, obs.shape[-2]*[act.trivial_repr])(obs)
+        out = torch.cat([out[:, 0:1], out[:, 2:3], out[:, 4:5], out[:, 6:7], out[:, 1:2], out[:, 3:4], out[:, 5:6], out[:, 7:8], ls], dim=1).reshape(1, -1, 1, 1)
+        out_type = escnn.nn.FieldType(act, 2*[act.irrep(1)] + 12*[act.trivial_repr])
+
+        out_ = out_type(out)
+        for i, g in enumerate(act.testing_elements):
+            print(i, g)
+            out_tr = out_.transform(g).tensor.reshape(1, -1)
+            out_tr = torch.cat([out_tr[:, 0:1], out_tr[:, 4:5], out_tr[:, 1:2], out_tr[:, 5:6], out_tr[:, 2:3], out_tr[:, 6:7], out_tr[:, 3:4], out_tr[:, 7:8], out_tr[:, 8:]], dim=1)
+
+            x_tr = x.transform(g)
+            out_x_tr, _, _, ls_x_tr = actor(x_tr.tensor)
+            out_x_tr_ = torch.cat([out_x_tr, ls_x_tr], dim=1)
+
+            print(out_tr)
+            print(out_x_tr_)
+            assert torch.allclose(out_x_tr_, out_tr, atol=1e-2)
+            print('OK')
+            print('-'*50)
+
+    elif message == 'Test equivariant actor 1':
+        # import ipdb; ipdb.set_trace()
+        print('='*50)
+        print('Test equivariant actor 1')
+        print('='*50)
+        # actor = ActorEquivariant(obs_shape=obs_shape, action_shape=(8,), hidden_dim=feature_dim, encoder_type='pixel-equivariant', encoder_feature_dim=feature_dim, log_std_min=-20, log_std_max=2, num_layers=1, num_filters=16, N=N)
+        actor = agent.actor
+        out, _, _, ls = actor(obs, picker_state)
+        x = escnn.nn.FieldType(act, obs.shape[-3]*[act.trivial_repr])(obs)
+        picker_ = escnn.nn.FieldType(act, 2*[act.trivial_repr])(picker_state.view(1, 2, 1, 1))
+        out = torch.cat([out[:, 0:1], out[:, 2:3], out[:, 4:5], out[:, 6:7], out[:, 1:2], out[:, 3:4], out[:, 5:6], out[:, 7:8], ls], dim=1).reshape(1, -1, 1, 1)
+        out_type = escnn.nn.FieldType(act, 2*[act.irrep(1)] + 12*[act.trivial_repr])
+
+        out_ = out_type(out)
+        for i, g in enumerate(act.testing_elements):
+            print(i, g)
+            out_tr = out_.transform(g).tensor.reshape(1, -1)
+            out_tr = torch.cat([out_tr[:, 0:1], out_tr[:, 4:5], out_tr[:, 1:2], out_tr[:, 5:6], out_tr[:, 2:3], out_tr[:, 6:7], out_tr[:, 3:4], out_tr[:, 7:8], out_tr[:, 8:]], dim=1)
+
+            x_tr = x.transform(g)
+            picker_tr = picker_.transform(g)
+            out_x_tr, _, _, ls_x_tr = actor(x_tr.tensor, picker_tr.tensor)
+            out_x_tr_ = torch.cat([out_x_tr, ls_x_tr], dim=1)
+
+            # print(out_tr)
+            # print(out_x_tr_)
+            # assert torch.allclose(out_x_tr_, out_tr, atol=1e-2)
+            print(torch.mean((out_x_tr_ - out_tr)**2))
+            print('OK')
+            print('-'*50)
+
+    elif message == 'Test equivariant critic':
+        print('='*50)
+        print('Test equivariant critic')
+        print('='*50)
+        # action = torch.randn(1, 8)
+        # critic = CriticEquivariant(obs_shape=obs_shape, action_shape=(8,), hidden_dim=feature_dim, encoder_type='pixel-equivariant', encoder_feature_dim=feature_dim, num_layers=1, num_filters=16, N=N)
+        critic = agent.critic
+        out1, out2 = critic(obs, action)
+        x = escnn.nn.FieldType(act, obs.shape[-3]*[act.trivial_repr])(obs)
+        action_ = torch.cat([action[:, 1:2], action[:, 3:4], action[:, 5:6], action[:, 7:8], action[:, 0:1], action[:, 2:3], action[:, 4:5], action[:, 6:7]], dim=1).reshape(1, 8, 1, 1)
+        action = escnn.nn.FieldType(act, 4 * [act.trivial_repr] + 2*[act.irrep(1)])(action_)
+
+        for i, g in enumerate(act.testing_elements):
+            print(i, g)
+            out1_tr, out2_tr = out1, out2
+            x_tr = x.transform(g)
+            a_tr = action.transform(g).tensor
+            a_tr_ = torch.cat([a_tr[:, 4:5, :, :], a_tr[:, 0:1, :, :], a_tr[:, 5:6, :, :], a_tr[:, 1:2, :, :], a_tr[:, 6:7, :, :], a_tr[:, 2:3, :, :], a_tr[:, 7:8, :, :], a_tr[:, 3:4, :, :]], dim=1).reshape(1, 8)
+            out1_, out2_ = critic(x_tr.tensor, a_tr_)
+            print(out1_)
+            print(out1_tr)
+            # print mse
+            # print(torch.mean((out1_ - out1_tr)**2))
+            assert torch.allclose(out1_, out1_tr, atol=1e-1)
+            assert torch.allclose(out2_, out2_tr, atol=1e-1)
+            print('OK')
+            print('-'*50)
+
+    elif message == 'Test equivariant critic 1':
+        # import ipdb; ipdb.set_trace()
+        print('='*50)
+        print('Test equivariant critic 1')
+        print('='*50)
+        # action = torch.randn(1, 8)
+        # critic = CriticEquivariant(obs_shape=obs_shape, action_shape=(8,), hidden_dim=feature_dim, encoder_type='pixel-equivariant', encoder_feature_dim=feature_dim, num_layers=1, num_filters=16, N=N)
+        critic = agent.critic
+        out1, out2 = critic(obs, picker_state, action)
+        x = escnn.nn.FieldType(act, obs.shape[-3]*[act.trivial_repr])(obs)
+        picker_ = escnn.nn.FieldType(act, 2*[act.trivial_repr])(picker_state.view(1, 2, 1, 1))
+        action_ = torch.cat([action[:, 1:2], action[:, 3:4], action[:, 5:6], action[:, 7:8], action[:, 0:1], action[:, 2:3], action[:, 4:5], action[:, 6:7]], dim=1).reshape(1, 8, 1, 1)
+        action = escnn.nn.FieldType(act, 4 * [act.trivial_repr] + 2*[act.irrep(1)])(action_)
+
+        for i, g in enumerate(act.testing_elements):
+            print(i, g)
+            out1_tr, out2_tr = out1, out2
+            x_tr = x.transform(g)
+            picker_tr = picker_.transform(g)
+            a_tr = action.transform(g).tensor
+            a_tr_ = torch.cat([a_tr[:, 4:5, :, :], a_tr[:, 0:1, :, :], a_tr[:, 5:6, :, :], a_tr[:, 1:2, :, :], a_tr[:, 6:7, :, :], a_tr[:, 2:3, :, :], a_tr[:, 7:8, :, :], a_tr[:, 3:4, :, :]], dim=1).reshape(1, 8)
+            out1_, out2_ = critic(x_tr.tensor, picker_tr.tensor, a_tr_)
+            # print(out1_)
+            # print(out1_tr)
+            print(torch.mean((out1_ - out1_tr)**2))
+            # assert torch.allclose(out1_, out1_tr, atol=1e-1)
+            # assert torch.allclose(out2_, out2_tr, atol=1e-1)
+            print('OK')
+            print('-'*50)
+
+    else:
+        print('Wrong message')
 
 def update_env_kwargs(vv):
     new_vv = vv.copy()
@@ -110,7 +257,7 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
                 frames.append(env.get_image(128, 128))
                 rewards.append(reward)
                 if done:
-                    for i in range(env.horizon - count):
+                    for i in range(env.horizon + 1 - count):
                         frames.append(env.get_image(128, 128))
                 if count == env.horizon:
                     done = True
@@ -146,6 +293,37 @@ def make_agent(obs_shape, action_shape, args, device):
     if args.agent == 'sac':
         
         return SacAgent(
+            args=args,
+            obs_shape=obs_shape,
+            action_shape=action_shape,
+            device=device,
+            hidden_dim=args.hidden_dim,
+            discount=args.discount,
+            init_temperature=args.init_temperature,
+            alpha_lr=args.alpha_lr,
+            alpha_beta=args.alpha_beta,
+            alpha_fixed=args.alpha_fixed,
+            actor_lr=args.actor_lr,
+            actor_beta=args.actor_beta,
+            actor_log_std_min=args.actor_log_std_min,
+            actor_log_std_max=args.actor_log_std_max,
+            actor_update_freq=args.actor_update_freq,
+            critic_lr=args.critic_lr,
+            critic_beta=args.critic_beta,
+            critic_tau=args.critic_tau,
+            critic_target_update_freq=args.critic_target_update_freq,
+            encoder_type=args.encoder_type,
+            encoder_feature_dim=args.encoder_feature_dim,
+            encoder_lr=args.encoder_lr,
+            encoder_tau=args.encoder_tau,
+            num_layers=args.num_layers,
+            num_filters=args.num_filters,
+            log_interval=args.log_interval,
+            detach_encoder=args.detach_encoder,
+            num_rotations=args.num_rotations
+        )
+    elif args.agent == 'sacfd':
+        return SACfD(
             args=args,
             obs_shape=obs_shape,
             action_shape=action_shape,
@@ -232,16 +410,31 @@ def main(args):
         pre_aug_obs_shape = obs_shape
 
     if args.aug_transition:
-        print(f'==================== AUGMENTED TRANSITION with {args.aug_n} TRANSFORMATION of {args.aug_type}====================')
-        replay_buffer = utils.ReplayBufferAugmented(
-            obs_shape=pre_aug_obs_shape,
-            action_shape=action_shape,
-            capacity=args.replay_buffer_capacity,
-            batch_size=args.batch_size,
-            device=device,
-            image_size=args.image_size,
-            aug_n = args.aug_n,
-        )
+        if args.prioritized_replay:
+            print(f'================ AUGMENTED TRANSITION with {args.aug_n} TRANSFORMATION of {args.aug_type} and PRIORITIZED REPLAY =================')
+            replay_buffer = utils.PrioritizedReplayBufferAugmented(
+                obs_shape=pre_aug_obs_shape,
+                action_shape=action_shape,
+                capacity=args.replay_buffer_capacity,
+                batch_size=args.batch_size,
+                device=device,
+                image_size=args.image_size,
+                aug_n = args.aug_n,
+                alpha=args.prioritized_replay_alpha,
+            )
+            p_beta_schedule = utils.LinearSchedule(schedule_timesteps=args.num_train_steps, initial_p=args.per_beta, final_p=1.0)
+
+        else:
+            print(f'==================== AUGMENTED TRANSITION with {args.aug_n} TRANSFORMATION of {args.aug_type}====================')
+            replay_buffer = utils.ReplayBufferAugmented(
+                obs_shape=pre_aug_obs_shape,
+                action_shape=action_shape,
+                capacity=args.replay_buffer_capacity,
+                batch_size=args.batch_size,
+                device=device,
+                image_size=args.image_size,
+                aug_n = args.aug_n,
+                )
     else:
         print('================ DON NOT USE AUGMENTED TRANSITION =================')
         replay_buffer = utils.ReplayBuffer(
@@ -253,12 +446,12 @@ def main(args):
             image_size=args.image_size,
         )
 
-    agent = make_agent(
-        obs_shape=obs_shape,
-        action_shape=action_shape,
-        args=args,
-        device=device
-    )
+    # agent = make_agent(
+    #     obs_shape=obs_shape,
+    #     action_shape=action_shape,
+    #     args=args,
+    #     device=device
+    # )
     
     print('==================== START COLLECTING DEMONSTRATIONS ====================')
     all_frames_planner = []
@@ -266,83 +459,95 @@ def main(args):
     thresh = env.cloth_particle_radius + env.action_tool.picker_radius + env.action_tool.picker_threshold
     count_planner = 0
     
-    # while True:
-    #     obs = env.reset()
-    #     picker_state = utils.get_picker_state(env)
-    #     episode_step = 0
-    #     frames = [env.get_image(128, 128)]
-    #     expert_data = []
-    #     flag_reset = False
-    #     while True:
-    #         # choose random boundary point
-    #         choosen_id = utils.choose_random_particle_from_boundary(env)
-    #         if choosen_id is None:
-    #             print('[INFO] Cannot find boundary point!!!')
-    #             flag_reset = True
-    #             break
-    #         # move to two choosen boundary points and pick them
-    #         pick_choosen = utils.pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
-    #         if pick_choosen == 1:
-    #             count_planner += 1
-    #             break
-    #         if pick_choosen is None:
-    #             break
-    #         else:
-    #             episode_step, obs, picker_state = pick_choosen[0], pick_choosen[1], pick_choosen[2]
-    #         # Randomly choose primitive between fling and pick&drag
-    #         if np.random.rand() < 0.5:
-    #             # fling primitive
-    #             fling = utils.fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
-    #             if fling == 1:
-    #                 count_planner += 1
-    #                 break
-    #             if fling is None:
-    #                 flag_reset = True
-    #                 break
-    #             episode_step, obs, picker_state = fling[0], fling[1], fling[2]
-    #         else:
-    #             # pick&drag primitive
-    #             pick_drag = utils.pick_drag_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
-    #             if pick_drag == 1:
-    #                 count_planner += 1
-    #                 break
-    #             if pick_drag is None:
-    #                 flag_reset = True
-    #                 break
-    #             episode_step, obs, picker_state = pick_drag[0], pick_drag[1], pick_drag[2]
-    #         # release the cloth
-    #         release = utils.give_up_the_cloth(env, obs, picker_state, episode_step, frames, expert_data)
-    #         if release == 1:
-    #             count_planner += 1
-    #             break
-    #         if release is None:
-    #             flag_reset = True
-    #             break
-    #         episode_step, obs, picker_state = release[0], release[1], release[2]
-    #     if flag_reset:
-    #         continue
-    #     if len(frames) != 100:
-    #         for _ in range(100 - len(frames)):
-    #             frames.append(env.get_image(128, 128))
-    #     all_frames_planner.append(frames)
-    #     all_expert_data_planner.append(expert_data)
-    #     print('[INFO]Collected {} demonstrations'.format(count_planner))
-    #     if count_planner == args.num_demonstrations:
-    #         print('==================== FINISH COLLECTING DEMONSTRATIONS ====================')
-    #         break
+    while True:
+        obs = env.reset()
+        picker_state = utils.get_picker_state(env)
+        episode_step = 0
+        frames = [env.get_image(128, 128)]
+        expert_data = []
+        flag_reset = False
+        while True:
+            # choose random boundary point
+            choosen_id = utils.choose_random_particle_from_boundary(env)
+            if choosen_id is None:
+                print('[INFO] Cannot find boundary point!!!')
+                flag_reset = True
+                break
+            # move to two choosen boundary points and pick them
+            pick_choosen = utils.pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
+            if pick_choosen == 1:
+                count_planner += 1
+                break
+            if pick_choosen is None:
+                flag_reset = True
+                break
+            else:
+                episode_step, obs, picker_state = pick_choosen[0], pick_choosen[1], pick_choosen[2]
+            # Randomly choose primitive between fling and pick&drag
+            if np.random.rand() < 0.5:
+                # fling primitive
+                fling = utils.fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
+                if fling == 1:
+                    count_planner += 1
+                    break
+                if fling is None:
+                    flag_reset = True
+                    break
+                episode_step, obs, picker_state = fling[0], fling[1], fling[2]
+            else:
+                # pick&drag primitive
+                pick_drag = utils.pick_drag_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
+                if pick_drag == 1:
+                    count_planner += 1
+                    break
+                if pick_drag is None:
+                    flag_reset = True
+                    break
+                episode_step, obs, picker_state = pick_drag[0], pick_drag[1], pick_drag[2]
+            # release the cloth
+            release = utils.give_up_the_cloth(env, obs, picker_state, episode_step, frames, expert_data)
+            if release == 1:
+                count_planner += 1
+                break
+            if release is None:
+                flag_reset = True
+                break
+            episode_step, obs, picker_state = release[0], release[1], release[2]
+        if flag_reset:
+            continue
+        if len(frames) != env.horizon + 1:
+            for _ in range(env.horizon + 1 - len(frames)):
+                frames.append(env.get_image(128, 128))
+        all_frames_planner.append(frames)
+        all_expert_data_planner.append(expert_data)
+        print('[INFO]Collected {} demonstrations in {} steps'.format(count_planner, len(expert_data)))
+        if count_planner == args.num_demonstrations:
+            print('==================== FINISH COLLECTING DEMONSTRATIONS ====================')
+            break
 
     for i in all_expert_data_planner:
+        r = []
         for j in i:
             # obs, action, reward, next_obs, done, picker_state, picker_next_state
             # add to replay buffer
-            replay_buffer.add(j[0], j[5], j[1], j[2], j[3], j[6], j[4])
+            r.append(j[2])
+            if args.prioritized_replay:
+                replay_buffer.add(j[0], j[5], j[1], j[2], j[3], j[6], j[4], 1.0)
+            else:
+                replay_buffer.add(j[0], j[5], j[1], j[2], j[3], j[6], j[4])
+        plt.plot(range(len(r)), r)
+    plt.xlabel('Timestep')
+    plt.ylabel('Reward')
+    plt.title('Reward over time')
+    plt.savefig(os.path.join(video_dir, 'reward.png'))
+        
 
     for i in range(args.num_demonstrations//20):
         sub_all_frames_planner = all_frames_planner[i*20:(i+1)*20] 
         sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
         sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in sub_all_frames_planner])
         save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'expert_{}.gif'.format(i)))
-    # exit()
+    exit()
 
     episode, episode_reward, done, ep_info = 0, 0, True, []
     start_time = time.time()
@@ -392,15 +597,28 @@ def main(args):
 
         # run training update
         if step >= args.init_steps:
-            agent.update(replay_buffer, L, step)
+            if args.prioritized_replay:
+                agent.update(replay_buffer, L, step, p_beta_schedule)
+            else:
+                agent.update(replay_buffer, L, step)
         next_obs, reward, done, info = env.step(action)
         next_picker_state = utils.get_picker_state(env)
         # allow infinit bootstrap
         ep_info.append(info)
         episode_reward += reward
-        replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, float(done))
-        if episode_step + 1 == env.horizon:
-            done = True
+        replay_buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, float(done), 0.0)
         obs = next_obs
         picker_state = next_picker_state
         episode_step += 1
+        if episode_step == env.horizon:
+            done = True
+
+        # while True:
+            # obs, picker_state, action, reward, next_obs, next_picker_state, done, _, _, _ = replay_buffer.sample(0.4)
+            # import ipdb; ipdb.set_trace()
+            # obs = obs[0].unsqueeze(0)
+            # picker_state = picker_state[0].unsqueeze(0)
+            # action = action[0].unsqueeze(0)
+# 
+            # test_equi(message='Test equivariant actor 1', obs=obs, picker_state=picker_state, action=action, agent=agent)
+            # test_equi(message='Test equivariant critic 1', obs=obs, picker_state=picker_state, action=action, agent=agent)

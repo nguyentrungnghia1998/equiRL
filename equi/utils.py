@@ -12,7 +12,8 @@ import time
 from skimage.util.shape import view_as_windows
 from collections import deque
 from scipy.ndimage import affine_transform
-from curl.default_config import DEFAULT_CONFIG
+from equi.default_config import DEFAULT_CONFIG
+from equi.segment_tree import SumSegmentTree, MinSegmentTree
 from matplotlib import pyplot as plt
 from PIL import Image
 from scipy.spatial import ConvexHull
@@ -243,6 +244,197 @@ class ReplayBuffer(Dataset):
     def __len__(self):
         return self.capacity
 
+class ReplayBufferExpert(ReplayBuffer):
+    def __init__(self, obs_shape, action_shape, capacity, batch_size, device, num_picker = 2, image_size=84, transform=None):
+        super().__init__(obs_shape, action_shape, capacity, batch_size, device, num_picker, image_size, transform)
+        self.expert = np.empty((capacity, 1), dtype=np.float32)
+        self.count_length = []
+        self._expert_idx = []
+    
+    def add(self, obs, picker_state, action, reward, next_obs, next_picker_state, done, expert):
+        while self.expert[self.idx]  == 1:
+            self.idx = (self.idx + 1) % self.capacity
+        np.copyto(self.obses[self.idx], obs)
+        np.copyto(self.actions[self.idx], action)
+        np.copyto(self.rewards[self.idx], reward)
+        np.copyto(self.next_obses[self.idx], next_obs)
+        np.copyto(self.not_dones[self.idx], not done)
+        np.copyto(self.picker_states[self.idx], picker_state)
+        np.copyto(self.next_picker_states[self.idx], next_picker_state)
+        np.copyto(self.expert[self.idx], expert)
+        if expert == 1:
+            self._expert_idx.append(self.idx)
+        if self.idx >= self.__len__():
+            self.count_length.append(done)
+        else:
+            self.count_length[self.idx] = done
+        self.idx = (self.idx + 1) % self.capacity
+        self.full = self.full or self.idx == 0
+    
+    def sample_proprio(self):
+        assert len(self._expert_idx) >= self.batch_size/2
+        assert len(self.__len__()) - len(self._expert_idx) >= self.batch_size/2
+        expert_indexes = np.random.choice(self._expert_idx, size=int(self.batch_size/2)).tolist()
+        non_expert_mask = np.ones(len(self.obses), dtype=bool)
+        non_expert_mask[np.array(self._expert_idx)] = 0
+        non_expert_indexes = np.random.choice(np.arange(len(self.obses))[non_expert_mask], size=int(self.batch_size/2)).tolist()
+        indexes = expert_indexes + non_expert_indexes
+        obses = self.obses[indexes]
+        next_obses = self.next_obses[indexes]
+
+        obses = torch.as_tensor(obses, device=self.device).float()
+        actions = torch.as_tensor(self.actions[indexes], device=self.device).float()
+        rewards = torch.as_tensor(self.rewards[indexes], device=self.device).float()
+        next_obses = torch.as_tensor(next_obses, device=self.device).float()
+        not_dones = torch.as_tensor(self.not_dones[indexes], device=self.device).float()
+        picker_states = torch.as_tensor(self.picker_states[indexes], device=self.device).float()
+        next_picker_states = torch.as_tensor(self.next_picker_states[indexes], device=self.device).float()
+        expert = torch.as_tensor(self.expert[indexes], device=self.device).bool()
+        return obses, picker_states, actions, rewards, next_obses, next_picker_states, not_dones, expert
+    
+    def save(self, save_dir):
+        if self.idx == self.last_save:
+            return
+        path = os.path.join(save_dir, '%d_%d.pt' % (self.last_save, self.idx))
+        patload = [
+            self.obses[self.last_save:self.idx],
+            self.next_obses[self.last_save:self.idx],
+            self.actions[self.last_save:self.idx],
+            self.rewards[self.last_save:self.idx],
+            self.not_dones[self.last_save:self.idx],
+            self.picker_states[self.last_save:self.idx],
+            self.next_picker_states[self.last_save:self.idx],
+            self.expert[self.last_save:self.idx]
+        ]
+        self.last_save = self.idx
+        torch.save(patload, path)
+    
+    def load(self, save_dir):
+        chunks = os.listdir(save_dir)
+        chunks = sorted(chunks, key=lambda x: int(x.split('_')[0]))
+        for chunk in chunks:
+            start, end = [int(x) for x in chunk.split('.')[0].split('_')]
+            path = os.path.join(save_dir, chunk)
+            patload = torch.load(path)
+            assert self.idx == start
+            self.obses[start:end] = patload[0]
+            self.next_obses[start:end] = patload[1]
+            self.actions[start:end] = patload[2]
+            self.rewards[start:end] = patload[3]
+            self.not_dones[start:end] = patload[4]
+            self.picker_states[start:end] = patload[5]
+            self.next_picker_states[start:end] = patload[6]
+            self.expert[start:end] = patload[7]
+            self.idx = end
+    
+    def __getitem__(self, idx):
+        obs, picker_state, action, reward, next_obs, next_picker_state, not_done = super().__getitem__(idx)
+        expert = self.expert[idx]
+        return obs, picker_state, action, reward, next_obs, next_picker_state, not_done, expert
+    
+    def __len__(self):
+        return len(self.count_length)
+
+
+class PrioritizedReplayBufferExpert:
+    def __init__(self, obs_shape, action_shape, capacity, batch_size, device, num_picker = 2, image_size=84, transform=None, alpha=0.6):
+        self.buffer = ReplayBufferExpert(obs_shape, action_shape, capacity, batch_size, device, num_picker, image_size, transform)
+        assert alpha >= 0
+        self._alpha = alpha
+
+        it_capacity = 1
+        while it_capacity < capacity:
+            it_capacity *= 2
+
+        self._it_sum = SumSegmentTree(it_capacity)
+        self._it_min = MinSegmentTree(it_capacity)
+        self._max_priority = 1.0
+    
+    def __len__(self):
+        return len(self.buffer)
+    
+    def __getitem__(self, key):
+        return self.buffer[key]
+    
+    def __setitem__(self, key, value):
+        self.buffer[key] = value
+    
+    def add(self, obs, picker_state, action, reward, next_obs, next_picker_state, done, expert):
+        idx = self.buffer.idx
+        self.buffer.add(obs, picker_state, action, reward, next_obs, next_picker_state, done, expert)
+        self._it_sum[idx] = self._max_priority ** self._alpha
+        self._it_min[idx] = self._max_priority ** self._alpha
+    
+    def _sample_proportional(self, batch_size):
+        res = []
+        for i in range(batch_size):
+            mass = random.random() * self._it_sum.sum(0, len(self.buffer) - 1)
+            idx = self._it_sum.find_prefixsum_idx(mass)
+            res.append(idx)
+        return res
+    
+    def sample(self, beta=0.4):
+        assert beta > 0
+        idxes = self._sample_proportional(self.buffer.batch_size)
+        weights = []
+        p_min = self._it_min.min() / self._it_sum.sum()
+        max_weight = (p_min * len(self.buffer)) ** (-beta)
+
+        for idx in idxes:
+            p_sample = self._it_sum[idx] / self._it_sum.sum()
+            weight = (p_sample * len(self.buffer)) ** (-beta)
+            weights.append(weight / max_weight)
+        # import ipdb; ipdb.set_trace()
+        weights = torch.tensor(weights, dtype=torch.float, device=self.buffer.device)
+        obses = self.buffer.obses[idxes]
+        next_obses = self.buffer.next_obses[idxes]
+
+        obses = torch.as_tensor(obses, device=self.buffer.device).float()
+        actions = torch.as_tensor(self.buffer.actions[idxes], device=self.buffer.device).float()
+        rewards = torch.as_tensor(self.buffer.rewards[idxes], device=self.buffer.device).float()
+        next_obses = torch.as_tensor(next_obses, device=self.buffer.device).float()
+        not_dones = torch.as_tensor(self.buffer.not_dones[idxes], device=self.buffer.device).float()
+        picker_states = torch.as_tensor(self.buffer.picker_states[idxes], device=self.buffer.device).float()
+        next_picker_states = torch.as_tensor(self.buffer.next_picker_states[idxes], device=self.buffer.device).float()
+        expert = torch.as_tensor(self.buffer.expert[idxes], device=self.buffer.device).bool()
+        
+        return obses, picker_states, actions, rewards, next_obses, next_picker_states, not_dones, expert, weights, idxes
+    
+    def update_priorities(self, idxes, priorities):
+        assert len(idxes) == len(priorities)
+        for idx, priority in zip(idxes, priorities):
+            assert priority > 0
+            assert 0 <= idx < len(self.buffer)
+            self._it_sum[idx] = priority ** self._alpha
+            self._it_min[idx] = priority ** self._alpha
+
+            self._max_priority = max(self._max_priority, priority)
+
+
+class PrioritizedReplayBufferAugmented(PrioritizedReplayBufferExpert):
+    def __init__(self, obs_shape, action_shape, capacity, batch_size, device, num_picker = 2, image_size=84, transform=None, alpha=0.6, aug_n=9):
+        super().__init__(obs_shape, action_shape, capacity, batch_size, device, num_picker, image_size, transform, alpha)
+        self.aug_n = aug_n
+
+    def add(self, obs, picker_state, action, reward, next_obs, next_picker_state, done, expert):
+        super().add(obs, picker_state, action, reward, next_obs, next_picker_state, done, expert)
+        # os.makedirs('augmented', exist_ok=True)
+        # plt.figure(figsize=(15, 15))
+        # plt.subplot(self.aug_n+1, 2, 1)
+        # plt.imshow(obs[0].numpy().transpose(1, 2, 0))
+        # plt.subplot(self.aug_n+1, 2, 2)
+        # plt.imshow(next_obs[0].numpy().transpose(1, 2, 0))
+
+        for i in range(self.aug_n):
+            obs_, action_, reward_, next_obs_, done_ = augmentTransition(obs, action, reward, next_obs, done, DEFAULT_CONFIG['aug_type'])
+            # plt.subplot(self.aug_n+1, 2, 2*i+3)
+            # plt.imshow(obs_[0].numpy().transpose(1, 2, 0))
+            # plt.subplot(self.aug_n+1, 2, 2*i+4)
+            # plt.imshow(next_obs_[0].numpy().transpose(1, 2, 0))
+            super().add(obs_, picker_state, action_, reward_, next_obs_, next_picker_state, done_, expert)
+        # plt.savefig(f'augmented/{self.buffer.idx}.png')
+        # exit()
+
 class ReplayBufferAugmented(ReplayBuffer):
     def __init__(self, obs_shape, action_shape, capacity, batch_size, device, num_picker = 2, image_size=84, transform=None, aug_n=9):
         super().__init__(obs_shape, action_shape, capacity, batch_size, device, num_picker, image_size, transform)
@@ -443,6 +635,31 @@ def choose_random_particle_from_boundary(env):
         bound_id.add(simplex[1])
     # take the corner points
     corner_point_upper_left, corner_point_lower_left, corner_point_upper_right, corner_point_lower_right = env._get_key_point_idx()[0], env._get_key_point_idx()[1], env._get_key_point_idx()[2], env._get_key_point_idx()[3]
+    count = []
+    for i in [corner_point_upper_left, corner_point_lower_left, corner_point_upper_right, corner_point_lower_right]:
+        if i in bound_id:
+            count.append(i)
+    if len(count) == 3:
+        print('33333333333333')
+        id1 = None
+        id2 = None
+        if corner_point_upper_left not in count:
+            id1 = corner_point_upper_left
+            id2 = random.sample([corner_point_lower_left, corner_point_upper_right], 1)[0]
+        elif corner_point_lower_left not in count:
+            id1 = corner_point_lower_left
+            id2 = random.sample([corner_point_upper_left, corner_point_lower_right], 1)[0]
+        elif corner_point_upper_right not in count:
+            id1 = corner_point_upper_right
+            id2 = random.sample([corner_point_upper_left, corner_point_lower_right], 1)[0]
+        else:
+            id1 = corner_point_lower_right
+            id2 = random.sample([corner_point_upper_left, corner_point_lower_left], 1)[0]
+        choosen_id = np.array([id1, id2])
+        if np.linalg.norm(particle_pos[choosen_id[0], :3] - picker_pos[0]) > np.linalg.norm(particle_pos[choosen_id[1], :3] - picker_pos[0]):
+            return np.array([choosen_id[1], choosen_id[0]])
+        return choosen_id
+            
     corner = []
     if corner_point_upper_left in bound_id and corner_point_lower_left in bound_id:
         corner.append((corner_point_upper_left, corner_point_lower_left))
@@ -520,44 +737,7 @@ def pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step,
 
 def fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data, max_step=10):
     # fling primitive
-    # first, move to the cloth up to the ground and down into a particle touch the ground
-    count_move_height = 0
-    while True:
-        action = np.array([0, 1, 0, 1, 0, 1, 0, 1])
-        next_obs, reward, done, info = env.step(action)
-        next_picker_state = get_picker_state(env)
-        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
-        frames.append(env.get_image(128, 128))
-        episode_step += 1
-        count_move_height += 1
-        obs = next_obs
-        picker_state = next_picker_state
-        if done:
-            return 1
-        if episode_step == env.horizon:
-            return None
-        if (env.action_tool._get_pos()[1][:, 1] >= 2*env.cloth_particle_radius).all() or count_move_height >= max_step:
-            break
-
-    count_move_height_back = 0
-    while True:
-        if (env.action_tool._get_pos()[1][:, 1] <= 2*env.cloth_particle_radius).any():
-            break
-        action = np.array([0, -0.2, 0, 1, 0, -0.2, 0, 1])
-        next_obs, reward, done, info = env.step(action)
-        next_picker_state = get_picker_state(env)
-        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
-        frames.append(env.get_image(128, 128))
-        episode_step += 1
-        count_move_height_back += 1
-        obs = next_obs
-        picker_state = next_picker_state
-        if done:
-            return 1
-        if episode_step == env.horizon:
-            return None
-
-    # second, stretch the cloth
+    # first, move to the cloth up and stretch the cloth
     curr_pos = env.action_tool._get_pos()[0]
     init_pos = env._get_flat_pos()
     init_dis = np.linalg.norm(init_pos[choosen_id[0], [0, 2]] - init_pos[choosen_id[1], [0, 2]])
@@ -576,28 +756,28 @@ def fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, fr
     target_pos[left, 2] = curr_pos[left, 2] - denta * sin_phi
     target_pos[right, 0] = curr_pos[right, 0] + denta * cos_phi
     target_pos[right, 2] = curr_pos[right, 2] + denta * sin_phi
-    count_stretch = 0
-    while True:
+    for i in range(max_step):
+        m = np.exp(-i / 15)
         picker_pos = env.action_tool._get_pos()[0]
         dis = target_pos - picker_pos
         norm = np.linalg.norm(dis, axis=1)
         action = np.clip(dis, -0.08, 0.08) / 0.08
+        action[:, 1] = m
         action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
         next_picker_state = get_picker_state(env)
         expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
         frames.append(env.get_image(128, 128))
         episode_step += 1
-        count_stretch += 1
         obs = next_obs
         picker_state = next_picker_state
         if done:
             return 1
         if episode_step == env.horizon:
             return None
-        if (norm <= thresh).all() or count_stretch >= max_step:
+        if (norm <= thresh).all() and (env.action_tool._get_pos()[1][:, 1] >= 2*env.cloth_particle_radius).all():
             break
-    # third, fling the cloth towards
+    # next, fling the cloth towards
     curr_pos = env.action_tool._get_pos()[0]
     if curr_pos[0, 0] > curr_pos[1, 0]:
         left = 1
@@ -610,7 +790,10 @@ def fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, fr
     k = - denta_y / denta_x
     dy = 1 / np.sqrt(1 + k**2)
     dx = k / np.sqrt(1 + k**2)
-    for i in range(8):
+    if k * curr_pos[right, 0] + curr_pos[right, 2] < 0:
+        dx = -dx
+        dy = -dy
+    for i in range(6):
         m = np.exp(-i/2)
         action = np.array([dx*m, m, dy*m, 1.0, dx*m, m, dy*m, 1.0])
         next_obs, reward, done, info = env.step(action)
@@ -624,9 +807,10 @@ def fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, fr
             return 1
         if episode_step == env.horizon:
             return None
-    # fourth, move back the cloth to the ground
+    # next, move back the cloth to the ground
     for i in range(15):
         if np.allclose(abs(env.action_tool._get_pos()[0][0, 2]), 0.6, atol=env.action_tool.picker_radius):
+            import ipdb; ipdb.set_trace()
             break
         m = np.exp(-i/10)
         action = np.array([-dx*m, -m, -dy*m, 1.0, -dx*m, -m, -dy*m, 1.0])
@@ -644,29 +828,7 @@ def fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, fr
     return [episode_step, obs, picker_state]
 
 def pick_drag_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data, max_step=10):
-    # move to picker to the height 0.1
-    curr_pos = env.action_tool._get_pos()[0]
-    curr_pos[:, 1] = 0.1
-    while True:
-        picker_pos = env.action_tool._get_pos()[0]
-        dis = curr_pos - picker_pos
-        norm = np.linalg.norm(dis, axis=1)
-        action = np.clip(dis, -0.08, 0.08) / 0.08
-        action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
-        next_obs, reward, done, info = env.step(action)
-        next_picker_state = get_picker_state(env)
-        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
-        frames.append(env.get_image(128, 128))
-        episode_step += 1
-        obs = next_obs
-        picker_state = next_picker_state
-        if done:
-            return 1
-        if episode_step == env.horizon:
-            return None
-        if (norm <= thresh).all():
-            break
-    # stretch the cloth
+    # move cloth up to 0.08 and stretch the cloth
     curr_pos = env.action_tool._get_pos()[0]
     init_pos = env._get_flat_pos()
     init_dis = np.linalg.norm(init_pos[choosen_id[0], [0, 2]] - init_pos[choosen_id[1], [0, 2]])
@@ -683,8 +845,10 @@ def pick_drag_primitive(env, obs, picker_state, choosen_id, thresh, episode_step
     target_pos = copy.deepcopy(curr_pos)
     target_pos[left, 0] = curr_pos[left, 0] - denta * cos_phi
     target_pos[left, 2] = curr_pos[left, 2] - denta * sin_phi
+    target_pos[left, 1] = curr_pos[left, 1] + 0.08
     target_pos[right, 0] = curr_pos[right, 0] + denta * cos_phi
     target_pos[right, 2] = curr_pos[right, 2] + denta * sin_phi
+    target_pos[right, 1] = curr_pos[right, 1] + 0.08
     count_stretch = 0
     while True:
         picker_pos = env.action_tool._get_pos()[0]
@@ -756,7 +920,7 @@ def give_up_the_cloth(env, obs, picker_state, episode_step, frames, expert_data)
         return None
     
     # move the picker up
-    for _ in range(2):
+    for _ in range(1):
         action = np.array([0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
         next_obs, reward, done, info = env.step(action)
         next_picker_state = get_picker_state(env)
@@ -779,3 +943,30 @@ def get_picker_state(env):
         else:
             picker_state.append(1) 
     return np.array(picker_state, dtype=np.uint8)
+
+class LinearSchedule(object):
+    def __init__(self, schedule_timesteps, final_p, initial_p=1.0):
+        """Linear interpolation between initial_p and final_p over
+        schedule_timesteps. After this many timesteps pass final_p is
+        returned.
+
+        Parameters
+        ----------
+        schedule_timesteps: int
+            Number of timesteps for which to linearly anneal initial_p
+            to final_p
+        initial_p: float
+            initial output value
+        final_p: float
+            final output value
+        """
+        self.schedule_timesteps = schedule_timesteps
+        self.final_p = final_p
+        self.initial_p = initial_p
+
+    def value(self, t):
+        """See Schedule.value"""
+        if self.schedule_timesteps == 0:
+            return self.final_p
+        fraction = min(float(t) / self.schedule_timesteps, 1.0)
+        return self.initial_p + fraction * (self.final_p - self.initial_p)

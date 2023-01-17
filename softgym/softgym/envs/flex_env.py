@@ -229,7 +229,17 @@ class FlexEnv(gym.Env):
             # _, depth = pyflex.render_cloth()
             depth = depth.reshape(height, width)[::-1]
             # depth[depth>5] = 0
-            depth = depth/np.max(depth)
+            # import ipdb; ipdb.set_trace()
+            # depth = depth/np.max(depth)
+            depth  = (depth -1.0) / 0.6
+            # print hist of depth
+            # import matplotlib.pyplot as plt
+            # plt.hist(depth.flatten(), bins=10)
+            # plt.show()
+            # save hist plot
+            # plt.savefig('depth_hist1.png')
+            # plt.imsave('depth.png', depth, cmap='gray')
+            # exit()
             return img, depth
         elif mode == 'human':
             raise NotImplementedError

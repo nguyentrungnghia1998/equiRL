@@ -343,7 +343,7 @@ class SacAgent(object):
         self.critic_target.load_state_dict(self.critic.state_dict())
 
         # Tie encoder between actor and critic
-        self.actor.encoder.load_state_dict(self.critic.encoder.state_dict())
+        # self.actor.encoder.load_state_dict(self.critic.encoder.state_dict())
         
         self.log_alpha = torch.tensor(np.log(init_temperature)).to(device)
         self.log_alpha.requires_grad = True
@@ -465,6 +465,9 @@ class SacAgent(object):
         # get current Q estimates
         current_Q1, current_Q2 = self.critic(obs, picker_state, action, detach_encoder=self.detach_encoder)
         critic_loss = F.mse_loss(current_Q1,target_Q) + F.mse_loss(current_Q2, target_Q)
+        with torch.no_grad():
+            self.td_error = 0.5 * ((torch.abs(current_Q1 - target_Q) + torch.abs(current_Q2 - target_Q)))
+
         if step % self.log_interval == 0:
             L.log('train_critic/loss', critic_loss, step)
             if self.args.wandb:
@@ -569,7 +572,7 @@ class SacAgent(object):
         #soft update
         if step % self.critic_target_update_freq == 0:
             utils.soft_update_params(self.critic, self.critic_target, self.critic_tau)
-
+        
     def save(self, model_dir, step):
         torch.save(
             self.actor.state_dict(), '%s/actor_%s.pt' % (model_dir, step)
@@ -585,3 +588,109 @@ class SacAgent(object):
         self.critic.load_state_dict(
             torch.load('%s/critic_%s.pt' % (model_dir, step))
         )
+
+
+class SACfD(SacAgent):
+    """"
+    SAC agent with demonstrations
+    """
+    def __init__(
+                self, 
+                obs_shape, 
+                action_shape, 
+                device, 
+                args, 
+                hidden_dim=256, 
+                discount=0.99, 
+                init_temperature=0.01, 
+                alpha_lr=0.001, 
+                alpha_beta=0.9, 
+                alpha_fixed=False, 
+                actor_lr=0.001, 
+                actor_beta=0.9, 
+                actor_log_std_min=-10, 
+                actor_log_std_max=2, 
+                actor_update_freq=2, 
+                critic_lr=0.001, 
+                critic_beta=0.9, 
+                critic_tau=0.005, 
+                critic_target_update_freq=2, 
+                encoder_type='identity', 
+                encoder_feature_dim=50, 
+                encoder_lr=0.001, 
+                encoder_tau=0.005, 
+                num_layers=4, 
+                num_filters=32, 
+                cpc_update_freq=1, 
+                log_interval=100, 
+                detach_encoder=False, 
+                num_rotations=8,
+                demon_w=1.0, 
+                demon_l='pi'):
+        super().__init__(obs_shape, action_shape, device, args, hidden_dim, discount, init_temperature, alpha_lr, alpha_beta, alpha_fixed, actor_lr, actor_beta, actor_log_std_min, actor_log_std_max, actor_update_freq, critic_lr, critic_beta, critic_tau, critic_target_update_freq, encoder_type, encoder_feature_dim, encoder_lr, encoder_tau, num_layers, num_filters, cpc_update_freq, log_interval, detach_encoder, num_rotations)
+        self.demon_w = demon_w
+        assert demon_l in ['mean', 'pi']
+        self.demon_l = demon_l
+
+    def update_actor_and_alpha(self, obs, picker_state, action, expert, L, step):
+        # detach encoder, so we don't update it with the actor loss
+        mean, pi, log_pi, _ = self.actor(obs, picker_state)
+        actor_Q1, actor_Q2 = self.critic(obs, picker_state, pi)
+        actor_Q = torch.min(actor_Q1, actor_Q2)
+        actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
+        if expert.sum():
+            idx = [i for i in range(expert.shape[0]) if expert[i, :]]
+            if self.demon_l == 'pi':
+                # find all indexes have expert[indexes] == True
+                demon_loss = F.mse_loss(pi[idx], action[idx])
+                actor_loss += self.demon_w * demon_loss
+            elif self.demon_l == 'mean':
+                demon_loss = F.mse_loss(mean[idx], action[idx])
+                actor_loss += self.demon_w * demon_loss
+
+        if step % self.log_interval == 0:
+            L.log('train_actor/loss', actor_loss, step)
+            if self.args.wandb:
+                wandb.log({'train_actor_loss': actor_loss}, step=step)
+
+        # optimize the actor
+        self.actor_optimizer.zero_grad()
+        actor_loss.backward()
+        self.actor_optimizer.step()
+
+        if self.args.lr_decay is not None:
+            self.actor_lr_scheduler.step()
+            L.log('train/actor_lr', self.actor_optimizer.param_groups[0]['lr'], step)
+
+        if not self.alpha_fixed:
+            self.log_alpha_optimizer.zero_grad()
+            alpha_loss = (self.alpha * (-log_pi - self.target_entropy).detach()).mean()
+            if step % self.log_interval == 0:
+                L.log('train_alpha/loss', alpha_loss, step)
+                L.log('train_alpha/value', self.alpha, step)
+                if self.args.wandb:
+                    wandb.log({'train_alpha_loss': alpha_loss}, step=step)
+                    wandb.log({'train_alpha_value': self.alpha}, step=step)
+            alpha_loss.backward()
+            self.log_alpha_optimizer.step()
+
+    def update(self, replay_buffer, L, step, p_beta_schedule):
+        beta = p_beta_schedule.value(step)
+        obs, picker_state, action, reward, next_obs, next_picker_state, not_done, expert, weight, batch_idxes = replay_buffer.sample(beta)
+
+        if step % self.log_interval == 0:
+            L.log('train/batch_reward', reward.mean(), step)
+            if self.args.wandb:
+                wandb.log({'train_batch_reward': reward.mean()}, step=step)
+
+        #Critic
+        self.update_critic(obs, picker_state, action, reward, next_obs, next_picker_state, not_done, L, step)
+        #Actor
+        if step % self.actor_update_freq == 0:
+            self.update_actor_and_alpha(obs, picker_state, action, expert, L, step)
+        if step % self.critic_target_update_freq == 0:
+            utils.soft_update_params(self.critic, self.critic_target, self.critic_tau)
+
+        # import ipdb; ipdb.set_trace()
+        new_priorities = np.abs(self.td_error.cpu().squeeze()) + expert.float().cpu().squeeze() * self.args.per_expert_eps + self.args.per_eps
+        replay_buffer.update_priorities(batch_idxes, new_priorities)
