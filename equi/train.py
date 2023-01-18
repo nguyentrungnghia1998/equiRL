@@ -446,12 +446,12 @@ def main(args):
             image_size=args.image_size,
         )
 
-    # agent = make_agent(
-    #     obs_shape=obs_shape,
-    #     action_shape=action_shape,
-    #     args=args,
-    #     device=device
-    # )
+    agent = make_agent(
+        obs_shape=obs_shape,
+        action_shape=action_shape,
+        args=args,
+        device=device
+    )
     
     print('==================== START COLLECTING DEMONSTRATIONS ====================')
     all_frames_planner = []
@@ -547,7 +547,12 @@ def main(args):
         sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
         sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in sub_all_frames_planner])
         save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'expert_{}.gif'.format(i)))
-    exit()
+
+    for i in range(10000):
+        print(f'Train {i} step')
+        agent.update(replay_buffer, L, i, p_beta_schedule)
+        
+    # exit()
 
     episode, episode_reward, done, ep_info = 0, 0, True, []
     start_time = time.time()

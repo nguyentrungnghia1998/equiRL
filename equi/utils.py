@@ -635,30 +635,30 @@ def choose_random_particle_from_boundary(env):
         bound_id.add(simplex[1])
     # take the corner points
     corner_point_upper_left, corner_point_lower_left, corner_point_upper_right, corner_point_lower_right = env._get_key_point_idx()[0], env._get_key_point_idx()[1], env._get_key_point_idx()[2], env._get_key_point_idx()[3]
-    count = []
-    for i in [corner_point_upper_left, corner_point_lower_left, corner_point_upper_right, corner_point_lower_right]:
-        if i in bound_id:
-            count.append(i)
-    if len(count) == 3:
-        print('33333333333333')
-        id1 = None
-        id2 = None
-        if corner_point_upper_left not in count:
-            id1 = corner_point_upper_left
-            id2 = random.sample([corner_point_lower_left, corner_point_upper_right], 1)[0]
-        elif corner_point_lower_left not in count:
-            id1 = corner_point_lower_left
-            id2 = random.sample([corner_point_upper_left, corner_point_lower_right], 1)[0]
-        elif corner_point_upper_right not in count:
-            id1 = corner_point_upper_right
-            id2 = random.sample([corner_point_upper_left, corner_point_lower_right], 1)[0]
-        else:
-            id1 = corner_point_lower_right
-            id2 = random.sample([corner_point_upper_left, corner_point_lower_left], 1)[0]
-        choosen_id = np.array([id1, id2])
-        if np.linalg.norm(particle_pos[choosen_id[0], :3] - picker_pos[0]) > np.linalg.norm(particle_pos[choosen_id[1], :3] - picker_pos[0]):
-            return np.array([choosen_id[1], choosen_id[0]])
-        return choosen_id
+    # count = []
+    # for i in [corner_point_upper_left, corner_point_lower_left, corner_point_upper_right, corner_point_lower_right]:
+    #     if i in bound_id:
+    #         count.append(i)
+    # if len(count) == 3:
+    #     print('33333333333333')
+    #     id1 = None
+    #     id2 = None
+    #     if corner_point_upper_left not in count:
+    #         id1 = corner_point_upper_left
+    #         id2 = random.sample([corner_point_lower_left, corner_point_upper_right], 1)[0]
+    #     elif corner_point_lower_left not in count:
+    #         id1 = corner_point_lower_left
+    #         id2 = random.sample([corner_point_upper_left, corner_point_lower_right], 1)[0]
+    #     elif corner_point_upper_right not in count:
+    #         id1 = corner_point_upper_right
+    #         id2 = random.sample([corner_point_upper_left, corner_point_lower_right], 1)[0]
+    #     else:
+    #         id1 = corner_point_lower_right
+    #         id2 = random.sample([corner_point_upper_left, corner_point_lower_left], 1)[0]
+    #     choosen_id = np.array([id1, id2])
+    #     if np.linalg.norm(particle_pos[choosen_id[0], :3] - picker_pos[0]) > np.linalg.norm(particle_pos[choosen_id[1], :3] - picker_pos[0]):
+    #         return np.array([choosen_id[1], choosen_id[0]])
+    #     return choosen_id
             
     corner = []
     if corner_point_upper_left in bound_id and corner_point_lower_left in bound_id:
@@ -809,8 +809,7 @@ def fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, fr
             return None
     # next, move back the cloth to the ground
     for i in range(15):
-        if np.allclose(abs(env.action_tool._get_pos()[0][0, 2]), 0.6, atol=env.action_tool.picker_radius):
-            import ipdb; ipdb.set_trace()
+        if (abs(env.action_tool._get_pos()[0][:, [0, 2]]) + env.action_tool.picker_radius >= 0.6).any():
             break
         m = np.exp(-i/10)
         action = np.array([-dx*m, -m, -dy*m, 1.0, -dx*m, -m, -dy*m, 1.0])
@@ -888,7 +887,7 @@ def pick_drag_primitive(env, obs, picker_state, choosen_id, thresh, episode_step
         dx = -dx
         dy = -dy
     for i in range(6):
-        if np.allclose(abs(env.action_tool._get_pos()[0][0, 2]), 0.6, atol=env.action_tool.picker_radius):
+        if (abs(env.action_tool._get_pos()[0][:, [0, 2]]) + env.action_tool.picker_radius >= 0.6).any():
             break
         m = np.exp(-i/2)
         action = np.array([dx*m, -m, dy*m, 1.0, dx*m, -m, dy*m, 1.0])
@@ -906,18 +905,18 @@ def pick_drag_primitive(env, obs, picker_state, choosen_id, thresh, episode_step
     return [episode_step, obs, picker_state]
 
 def give_up_the_cloth(env, obs, picker_state, episode_step, frames, expert_data):
-    action = np.zeros(8)
-    next_obs, reward, done, info = env.step(action)
-    next_picker_state = get_picker_state(env)
-    expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
-    frames.append(env.get_image(128, 128))
-    episode_step += 1
-    obs = next_obs
-    picker_state = next_picker_state
-    if done:
-        return 1
-    if episode_step == env.horizon:
-        return None
+    # action = np.zeros(8)
+    # next_obs, reward, done, info = env.step(action)
+    # next_picker_state = get_picker_state(env)
+    # expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
+    # frames.append(env.get_image(128, 128))
+    # episode_step += 1
+    # obs = next_obs
+    # picker_state = next_picker_state
+    # if done:
+    #     return 1
+    # if episode_step == env.horizon:
+    #     return None
     
     # move the picker up
     for _ in range(1):
