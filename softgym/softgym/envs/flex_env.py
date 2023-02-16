@@ -231,7 +231,7 @@ class FlexEnv(gym.Env):
             # depth[depth>5] = 0
             # import ipdb; ipdb.set_trace()
             # depth = depth/np.max(depth)
-            depth  = (depth -1.0) / 0.6
+            depth  = (1.6 - depth) / 0.6
             # print hist of depth
             # import matplotlib.pyplot as plt
             # plt.hist(depth.flatten(), bins=10)

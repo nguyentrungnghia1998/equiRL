@@ -1,4 +1,5 @@
-from equi.train import run_task
+
+from equi.train_imitation import run_task
 from softgym.registered_env import env_arg_dict
 reward_scales = {
     'PassWater': 20.0,
@@ -53,7 +54,7 @@ def main():
     # Experiment
     parser.add_argument('--exp_name', default='EQUI_SAC', type=str)
     parser.add_argument('--env_name', default='ClothFlatten')
-    parser.add_argument('--log_dir', default='./data/equi/')
+    parser.add_argument('--log_dir', default='./data/imitation/')
     parser.add_argument('--test_episodes', default=10, type=int)
     parser.add_argument('--seed', default=100, type=int)
     parser.add_argument('--save_tb', default=False)  # Save stats to tensorbard
@@ -69,7 +70,7 @@ def main():
     # Override environment arguments
     parser.add_argument('--env_kwargs_render', default=True, type=bool)  # Turn off rendering can speed up training
     parser.add_argument('--env_kwargs_camera_name', default='default_camera', type=str)
-    parser.add_argument('--env_kwargs_observation_mode', default='img_depth', type=str)  # Should be in ['key_point', 'cam_rgb', 'point_cloud']
+    parser.add_argument('--env_kwargs_observation_mode', default='only_depth', type=str)  # Should be in ['key_point', 'cam_rgb', 'point_cloud']
     parser.add_argument('--env_kwargs_num_variations', default=100, type=int)
     parser.add_argument('--env_kwargs_use_picker_state', default=False, type=bool)
 
