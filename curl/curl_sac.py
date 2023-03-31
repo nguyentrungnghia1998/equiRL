@@ -96,7 +96,7 @@ class Actor(nn.Module):
         self.apply(weight_init)
 
     def forward(
-      self, obs, compute_pi=True, compute_log_pi=True, detach_encoder=False
+      self, obs, picker_state, compute_pi=True, compute_log_pi=True, detach_encoder=False
     ):
         obs = self.encoder(obs, detach=detach_encoder)
 

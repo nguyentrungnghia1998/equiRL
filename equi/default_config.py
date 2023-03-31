@@ -61,7 +61,7 @@ DEFAULT_CONFIG = {
     # expert
     'num_demonstrations': 100,
     # prioritized replay
-    'prioritized_replay': True,
+    'prioritized_replay': False,
     'prioritized_replay_alpha': 0.6,
     'per_beta': 0.4,
     'per_eps': 1e-6,
