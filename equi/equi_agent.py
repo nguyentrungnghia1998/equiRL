@@ -404,8 +404,6 @@ class SacAgent(object):
             # return mu.cpu().data.numpy().flatten()
 
     def sample_action(self, obs, picker_state):
-        if obs.shape[0] == 1:
-            obs = obs[0]
 
         with torch.no_grad():
             if not isinstance(obs, torch.Tensor):

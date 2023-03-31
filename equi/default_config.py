@@ -56,12 +56,12 @@ DEFAULT_CONFIG = {
     # equivariant
     'num_rotations': 4,
     # wandb
-    'wandb': True,
+    'wandb': False,
     'wandb_seed': 14,
     # expert
     'num_demonstrations': 100,
     # prioritized replay
-    'prioritized_replay': True,
+    'prioritized_replay': False,
     'prioritized_replay_alpha': 0.6,
     'per_beta': 0.4,
     'per_eps': 1e-6,
