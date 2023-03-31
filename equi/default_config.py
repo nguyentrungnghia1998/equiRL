@@ -57,7 +57,7 @@ DEFAULT_CONFIG = {
     'num_rotations': 4,
     # wandb
     'wandb': True,
-    'wandb_seed': 14,
+    'wandb_seed': 15,
     # expert
     'num_demonstrations': 100,
     # prioritized replay
@@ -65,5 +65,8 @@ DEFAULT_CONFIG = {
     'prioritized_replay_alpha': 0.6,
     'per_beta': 0.4,
     'per_eps': 1e-6,
-    'per_expert_eps': 1.0
+    'per_expert_eps': 1.0,
+    # pretrain
+    'pretrain': True,
+    'pretrain_steps': 100000,
 }
