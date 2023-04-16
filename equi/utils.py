@@ -969,3 +969,46 @@ class LinearSchedule(object):
             return self.final_p
         fraction = min(float(t) / self.schedule_timesteps, 1.0)
         return self.initial_p + fraction * (self.final_p - self.initial_p)
+
+class RNN_actor(nn.Module):
+    def __init__(self, input_shape = (1,128,128), device = "cpu"):
+        
+        super(RNN_actor, self).__init__()
+        
+        # Define the CNN
+        # self.length = input_shape[0]
+        self.channel = input_shape[0]
+        self.device = device
+        # self.length_video = length_video
+        self.cnn = nn.Sequential(
+            nn.Conv2d(in_channels=self.channel, out_channels=32, kernel_size=3, stride =1, padding=1),
+            nn.MaxPool2d(2),
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride =1, padding = 1),
+            nn.MaxPool2d(2),
+            nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride=1, padding = 1),
+            nn.MaxPool2d(2)
+        )
+        
+        self.fc1 = nn.Linear(128*16*16, 512)
+        self.rnn = nn.RNN(512, 64, 1, batch_first=True)
+        self.fc2 = nn.Linear(64, 8)
+        
+    def forward(self, x):
+        # Process the input image with the CNN
+        length = x.shape[1]
+        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
+        x = self.cnn(x)
+        x = x.view(x.size(0), -1)
+        
+        # Process the CNN output with the LSTM
+        x = self.fc1(x)
+
+        x = x.view(-1,length,x.size(1))
+        
+        h0 = torch.zeros(1, x.size(0), 64).to(self.device)
+
+        out, _ = self.rnn(x, h0)
+
+        out = self.fc2(out)
+        # Compute the output
+        return out
