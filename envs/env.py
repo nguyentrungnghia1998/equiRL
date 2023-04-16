@@ -91,11 +91,18 @@ class SoftGymEnv(object):
             obs, reward_k, done, info = self._env.step(action, **kwargs)
             if reward_k >= 1.0:
                 reward_k = 1.0
+            else:
+                reward_k = 0.0
             reward += reward_k
             self.t += 1  # Increment internal timer
+            # if reward == 1.0:
+                # done = True
+                # import ipdb; ipdb.set_trace()
 
-            if reward == 1.0:
+            if info['normalized_performance'] >= 1.0:
                 done = True
+            # if reward == 1.0:
+                # done = True
             # if done:
             # print('t:', self.t, self.max_episode_length, done)
             if self.symbolic:
