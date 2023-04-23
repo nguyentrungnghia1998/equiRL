@@ -65,7 +65,7 @@ def main():
     parser.add_argument('--alpha_fixed', default=False, type=bool)  # Automatic tuning of alpha
     parser.add_argument('--init_temperature', default=0.1, type=float)
     parser.add_argument('--replay_buffer_capacity', default=100000)
-    parser.add_argument('--batch_size', default=32)
+    parser.add_argument('--batch_size', default=8)
     parser.add_argument('--train_length', default = 30)
 
     # Override environment arguments

@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 from scipy.spatial import ConvexHull
 import wandb
 import gc
-from utils import RNN_actor
+from utils import RNN_actor, BC_RNN_actor
 from torch.utils.data import TensorDataset, DataLoader 
 
 def test_equi(message, obs, picker_state, action, agent):
@@ -449,7 +449,7 @@ def main(args):
             image_size=args.image_size,
         )
 
-    actor = RNN_actor(input_shape=(1,128,128), device=device).to(device)
+    actor = BC_RNN_actor(obs_shape=(1,128,128), device=device).to(device)
     
     print('==================== START COLLECTING DEMONSTRATIONS ====================')
     all_frames_planner = []
@@ -482,7 +482,7 @@ def main(args):
             else:
                 episode_step, obs, picker_state = pick_choosen[0], pick_choosen[1], pick_choosen[2]
             # Randomly choose primitive between fling and pick&drag
-            if np.random.rand() < 0.5:
+            if np.random.rand() < 1.5:
                 # fling primitive
                 fling = utils.fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
                 if fling == 1:
@@ -531,7 +531,7 @@ def main(args):
         obs_i = []
         action_i = []
         if len(i)>=args.train_length:
-            for j in range(1,args.train_length+1):
+            for j in range(1,args.train_length + 1):
                 data = i[-j]
                 r.insert(0,data[2])
                 obs_i.insert(0,data[0])
@@ -601,14 +601,14 @@ def main(args):
     # plt.savefig("data/imitation/actor_loss.png")
     # plt.show()
 
-    for epoch in range(20000):
+    for epoch in range(1000):
         print(f'Train {epoch} step')
         running_loss = 0.0
         steps.append(epoch)
         for i, (obs, action) in enumerate(data_loader):
             obs, action = obs.to(device), action.to(device)
             optimizer.zero_grad()
-            outputs = actor(obs)
+            outputs, _, _ = actor(obs)
             loss = criterion(outputs,action)
             loss.backward()
             optimizer.step()
@@ -633,6 +633,7 @@ def main(args):
         for i in range(test_episode):
             obs = env.reset(eval_flag = True)
             obs = obs/255.0
+            obs = obs.to(device)
             picker_state = utils.get_picker_state(env)
             done = False
             episode_reward = 0
@@ -640,6 +641,8 @@ def main(args):
             frames = [env.get_image(128, 128)]
             rewards = []
             count = 0
+            h0 = torch.zeros(2,1,200).to(device)
+            c0 = torch.zeros(2,1,200).to(device)
             while not done:
                 # if args.encoder_type == 'pixel':
                 #     if obs.shape[0] == 1:
@@ -650,12 +653,11 @@ def main(args):
                 #         action = agent.sample_action(obs, picker_state)
                 #     else:
                 #         action = agent.select_action(obs, picker_state)
-                obs = obs.view(1,*obs.shape)
-                obs = obs.to(device)
-                action = actor(obs)
-                action = action.squeeze().cpu().detach().numpy()
+                obs = obs.unsqueeze(dim = 1)
+                action, hn, cn = actor(obs, (h0,c0))
                 obs, reward, done, info = env.step(action)
                 obs = obs/255.0
+                obs = obs.to(device)
                 picker_state = utils.get_picker_state(env)
                 episode_reward += reward
                 count += 1
@@ -667,6 +669,8 @@ def main(args):
                         frames.append(env.get_image(128, 128))
                 if count == env.horizon:
                     done = True
+                h0 = hn
+                c0 = cn
             plt.plot(range(len(rewards)), rewards)
             if len(all_frames) < 8:
                 all_frames.append(frames)
@@ -675,4 +679,4 @@ def main(args):
     plt.xlabel('Timestep')
     plt.ylabel('Reward')
     plt.title('Reward over time')
-    plt.savefig("data/RNN_imitation/result.png")
+    plt.savefig("data/RNN_imitation/test_reward.png")

@@ -990,7 +990,7 @@ class RNN_actor(nn.Module):
         )
         
         self.fc1 = nn.Linear(128*16*16, 512)
-        self.rnn = nn.RNN(512, 64, 1, batch_first=True)
+        self.rnn = nn.LSTM(512, 64, 1, batch_first=True)
         self.fc2 = nn.Linear(64, 8)
         
     def forward(self, x):
@@ -1005,10 +1005,72 @@ class RNN_actor(nn.Module):
 
         x = x.view(-1,length,x.size(1))
         
-        h0 = torch.zeros(1, x.size(0), 64).to(self.device)
+        h0 = torch.randn(1, x.size(0), 64).to(self.device)
+        c0 = torch.randn(1, x.size(0), 64).to(self.device)
 
-        out, _ = self.rnn(x, h0)
+        out, _ = self.rnn(x, (h0,c0))
 
         out = self.fc2(out)
         # Compute the output
         return out
+
+class BC_RNN_actor(nn.Module):
+    def __init__(self, obs_shape = (1,128,128), device = "cpu"):
+        
+        super(BC_RNN_actor, self).__init__()
+        
+        # Define the CNN
+        # self.length = input_shape[0]
+        self.channel = obs_shape[0]
+        self.device = device
+        # self.picker_shape = picker_shape
+        # self.length_video = length_video
+        self.encoder = nn.Sequential(
+            nn.Conv2d(in_channels=self.channel, out_channels=32, kernel_size=3, stride =1, padding=1),
+            nn.MaxPool2d(2),
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride =1, padding = 1),
+            nn.MaxPool2d(2),
+            nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride=1, padding = 1),
+            nn.MaxPool2d(2),
+            nn.Conv2d(in_channels=128, out_channels=256, kernel_size = 3, stride =1, padding = 1),
+            nn.MaxPool2d(2)
+        )
+        
+        self.fc1 = nn.Linear(256*8*8, 512)
+        self.fc2 = nn.Linear(512,128)
+        self.fc3 = nn.Linear(128,32)
+        self.rnn = nn.LSTM(32, 200 , 2, batch_first=True)
+        self.per_step = nn.Linear(200, 8)
+        self.relu = nn.ReLU()
+    def forward(self, x, init_state = None):
+        # Process the input image with the CNN
+        length = x.shape[1]
+        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
+        x = self.encoder(x)
+        x = x.view(x.size(0), -1)
+        
+        # Process the CNN output with the LSTM
+        x = self.relu(self.fc1(x))
+
+        x = self.relu(self.fc2(x))
+
+        x = self.fc3(x)
+
+        x = x.view(-1,length,x.size(1))
+        
+        if init_state is None:
+            h0 = torch.zeros(2,x.size(0),200).to(self.device)
+            c0 = torch.zeros(2,x.size(0),200).to(self.device)
+            init_state = (h0,c0)
+        out, (hn,cn) = self.rnn(x, init_state)
+
+        out = out.contiguous().view(-1,200)
+
+        out = self.per_step(out)
+
+        out = out.view(-1, length, out.size(1))
+
+        out = torch.tanh(out)
+
+        # Compute the output
+        return out, hn, cn
