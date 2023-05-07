@@ -17,7 +17,7 @@ from equi.segment_tree import SumSegmentTree, MinSegmentTree
 from matplotlib import pyplot as plt
 from PIL import Image
 from scipy.spatial import ConvexHull
-
+import torchvision.models as model_pretrain
 
 
 class ConvergenceChecker(object):
@@ -1074,3 +1074,168 @@ class BC_RNN_actor(nn.Module):
 
         # Compute the output
         return out, hn, cn
+
+class ResNet50Gray(nn.Module):
+    def __init__(self):
+        super(ResNet50Gray, self).__init__()
+        # Load the pre-trained ResNet-50 model
+        resnet = model_pretrain.resnet50(pretrained=True)
+        # Modify the first convolutional layer to accept 1 input channel instead of 3
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        # Copy the weights from the original RGB channel to all 3 channels
+        self.conv1.weight.data[:, :3, :, :] = resnet.conv1.weight.data.clone()
+        self.conv1.weight.data[:, 3:, :, :] = self.conv1.weight.data[:, :1, :, :]
+        # Use the rest of the pre-trained ResNet-50 model
+        self.bn1 = resnet.bn1
+        self.relu = resnet.relu
+        self.maxpool = resnet.maxpool
+        self.layer1 = resnet.layer1
+        self.layer2 = resnet.layer2
+        self.layer3 = resnet.layer3
+        self.layer4 = resnet.layer4
+        self.avgpool = resnet.avgpool
+        self.fc = resnet.fc
+
+    def forward(self, x):
+        # Convert grayscale images to RGB format
+        x = x.repeat(1, 3, 1, 1)
+        # Use the modified first convolutional layer
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.fc(x)
+        return x
+
+class TanhWrappedDistribution(torch.distributions.Distribution):
+    """
+    Class that wraps another valid torch distribution, such that sampled values from the base distribution are
+    passed through a tanh layer. The corresponding (log) probabilities are also modified accordingly.
+    Tanh Normal distribution - adapted from rlkit and CQL codebase
+    (https://github.com/aviralkumar2907/CQL/blob/d67dbe9cf5d2b96e3b462b6146f249b3d6569796/d4rl/rlkit/torch/distributions.py#L6).
+    """
+    def __init__(self, base_dist, scale=1.0, epsilon=1e-6):
+        """
+        Args:
+            base_dist (Distribution): Distribution to wrap with tanh output
+            scale (float): Scale of output
+            epsilon (float): Numerical stability epsilon when computing log-prob.
+        """
+        self.base_dist = base_dist
+        self.scale = scale
+        self.tanh_epsilon = epsilon
+        super(TanhWrappedDistribution, self).__init__()
+
+    def log_prob(self, value, pre_tanh_value=None):
+        """
+        Args:
+            value (torch.Tensor): some tensor to compute log probabilities for
+            pre_tanh_value: If specified, will not calculate atanh manually from @value. More numerically stable
+        """
+        value = value / self.scale
+        if pre_tanh_value is None:
+            one_plus_x = (1. + value).clamp(min=self.tanh_epsilon)
+            one_minus_x = (1. - value).clamp(min=self.tanh_epsilon)
+            pre_tanh_value = 0.5 * torch.log(one_plus_x / one_minus_x)
+        lp = self.base_dist.log_prob(pre_tanh_value)
+        tanh_lp = torch.log(1 - value * value + self.tanh_epsilon)
+        # In case the base dist already sums up the log probs, make sure we do the same
+        return lp - tanh_lp if len(lp.shape) == len(tanh_lp.shape) else lp - tanh_lp.sum(-1)
+    def sample(self, sample_shape=torch.Size(), return_pretanh_value=False):
+        """
+        Gradients will and should *not* pass through this operation.
+        See https://github.com/pytorch/pytorch/issues/4620 for discussion.
+        """
+        z = self.base_dist.sample(sample_shape=sample_shape).detach()
+
+        if return_pretanh_value:
+            return torch.tanh(z) * self.scale, z
+        else:
+            return torch.tanh(z) * self.scale
+
+    def rsample(self, sample_shape=torch.Size(), return_pretanh_value=False):
+        """
+        Sampling in the reparameterization case - for differentiable samples.
+        """
+        z = self.base_dist.rsample(sample_shape=sample_shape)
+
+        if return_pretanh_value:
+            return torch.tanh(z) * self.scale, z
+        else:
+            return torch.tanh(z) * self.scale
+
+class BC_RNN_GMM_actor(nn.Module):
+    def __init__(self, obs_shape = (1,128,128), device = "cpu", node = 5):
+        super(BC_RNN_GMM_actor, self).__init__()
+        self.channel = obs_shape[0]
+        self.device = device
+        self.node = node
+        self.encoder = model_pretrain.resnet50(pretrained = True)
+
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+        
+        for param in self.encoder.layer4.parameters():
+            param.requires_grad = True
+        
+        self.encoder.fc = nn.Linear(self.encoder.fc.in_features, 32)
+
+        self.per_step_mean = nn.Linear(200, node*8)
+        self.per_step_std = nn.Linear(200, node*8)
+        self.per_step_logit = nn.Linear(200, node)
+
+        self.rnn = nn.LSTM(32, 200 , 2, batch_first=True)
+
+        self.relu = nn.ReLU()
+    def forward(self, x, init_state = None, train = True):
+        # Process the input image with the CNN
+        length = x.shape[1]
+        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
+        x = self.encoder(x)
+
+        x = x.view(-1,length,x.size(1))
+        
+        if init_state is None:
+            h0 = torch.zeros(2,x.size(0),200).to(self.device)
+            c0 = torch.zeros(2,x.size(0),200).to(self.device)
+            init_state = (h0,c0)
+        out, (hn,cn) = self.rnn(x, init_state)
+
+        out = out.contiguous().view(-1,200)
+
+        mean = self.per_step_mean(out)
+
+        mean = mean.view(-1, length, self.node, 8)
+
+        std = self.per_step_std(out)
+        
+        std = std.view(-1, length, self.node, 8)
+
+        logits = self.per_step_logit(out)
+
+        logits = logits.view(-1, length, self.node)
+
+
+        if not train:
+            std = torch.ones_like(mean) * 1e-4
+        else:
+            std = torch.nn.functional.softplus(std) + 1e-4
+
+        component_distribution = torch.distributions.Normal(loc=mean, scale=std)
+        component_distribution = torch.distributions.Independent(component_distribution, 1)
+        mixture_distribution = torch.distributions.Categorical(logits=logits)
+
+        dists = torch.distributions.MixtureSameFamily(
+            mixture_distribution=mixture_distribution,
+            component_distribution=component_distribution,
+        )
+
+        dists = TanhWrappedDistribution(base_dist=dists, scale=1.)
+
+        return dists, hn, cn

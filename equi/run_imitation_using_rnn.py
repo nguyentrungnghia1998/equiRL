@@ -67,11 +67,12 @@ def main():
     parser.add_argument('--replay_buffer_capacity', default=100000)
     parser.add_argument('--batch_size', default=8)
     parser.add_argument('--train_length', default = 30)
+    parser.add_argument("--use_GMM", default=False, action = 'store_true')
 
     # Override environment arguments
     parser.add_argument('--env_kwargs_render', default=True, type=bool)  # Turn off rendering can speed up training
     parser.add_argument('--env_kwargs_camera_name', default='default_camera', type=str)
-    parser.add_argument('--env_kwargs_observation_mode', default='only_depth', type=str)  # Should be in ['key_point', 'cam_rgb', 'point_cloud']
+    parser.add_argument('--env_kwargs_observation_mode', default='cam_rgb', type=str)  # Should be in ['key_point', 'cam_rgb', 'point_cloud']
     parser.add_argument('--env_kwargs_num_variations', default=100, type=int)
     parser.add_argument('--env_kwargs_use_picker_state', default=False, type=bool)
 

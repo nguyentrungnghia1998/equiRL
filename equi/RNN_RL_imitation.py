@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 from scipy.spatial import ConvexHull
 import wandb
 import gc
-from utils import RNN_actor, BC_RNN_actor
+from utils import RNN_actor, BC_RNN_actor, BC_RNN_GMM_actor
 from torch.utils.data import TensorDataset, DataLoader 
 
 def test_equi(message, obs, picker_state, action, agent):
@@ -448,8 +448,10 @@ def main(args):
             device=device,
             image_size=args.image_size,
         )
-
-    actor = BC_RNN_actor(obs_shape=(1,128,128), device=device).to(device)
+    if args.use_GMM:
+        actor = BC_RNN_GMM_actor(obs_shape = (1,128,128), device = device).to(device)
+    else:
+        actor = BC_RNN_actor(obs_shape=(1,128,128), device=device).to(device)
     
     print('==================== START COLLECTING DEMONSTRATIONS ====================')
     all_frames_planner = []
@@ -554,7 +556,7 @@ def main(args):
     plt.xlabel('Timestep')
     plt.ylabel('Reward')
     plt.title('Reward over time')
-    plt.savefig(os.path.join(video_dir, 'reward.png'))
+    plt.savefig("data/RNN_imitation/video/reward.png")
     plt.show()  
 
     plt.close()  
@@ -609,7 +611,11 @@ def main(args):
             obs, action = obs.to(device), action.to(device)
             optimizer.zero_grad()
             outputs, _, _ = actor(obs)
-            loss = criterion(outputs,action)
+            if args.use_GMM:
+                log_probs = outputs.log_prob(action)
+                loss = -log_probs.mean()
+            else:
+                loss = criterion(outputs,action)
             loss.backward()
             optimizer.step()
 
@@ -620,11 +626,12 @@ def main(args):
     plt.plot(steps,losses)
     plt.savefig("data/RNN_imitation/actor_loss.png")
     plt.show()
+    plt.close()
 
 
     torch.save(actor.state_dict(),"data/RNN_imitation/actor_final.pt")
 
-    test_episode = 20
+    test_episode = 8
     sample_stochastically = True
     infos = []
     all_frames = []
@@ -654,7 +661,13 @@ def main(args):
                 #     else:
                 #         action = agent.select_action(obs, picker_state)
                 obs = obs.unsqueeze(dim = 1)
-                action, hn, cn = actor(obs, (h0,c0))
+                if args.use_GMM:
+                    dist, hn, cn = actor(obs, (h0, c0), train = False)
+                    action = dist.sample()
+                    action = action.cpu().numpy()
+                else:
+                    action, hn, cn = actor(obs, (h0,c0))
+                    action = action.detach().cpu().numpy()
                 obs, reward, done, info = env.step(action)
                 obs = obs/255.0
                 obs = obs.to(device)
@@ -680,3 +693,7 @@ def main(args):
     plt.ylabel('Reward')
     plt.title('Reward over time')
     plt.savefig("data/RNN_imitation/test_reward.png")
+
+    all_frames = np.array(all_frames).swapaxes(0, 1)
+    all_frames = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in all_frames])
+    save_numpy_as_gif(all_frames, "data/RNN_imitation/video/rnn_imitation.gif")
