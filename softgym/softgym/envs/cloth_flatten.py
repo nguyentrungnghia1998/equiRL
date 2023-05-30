@@ -42,7 +42,6 @@ class ClothFlattenEnv(ClothEnv):
             else:
                 pos[:, 1] = 0.005
             pos[:, 3] = 1
-            init_pos = deepcopy(pos)
             pyflex.set_positions(pos.flatten())
             pyflex.set_velocities(np.zeros_like(pos))
             pyflex.step()
@@ -88,7 +87,6 @@ class ClothFlattenEnv(ClothEnv):
             generated_states.append(deepcopy(self.get_state()))
             self.current_config = config  # Needed in _set_to_flatten function
             generated_configs[-1]['flatten_area'] = self._set_to_flatten()  # Record the maximum flatten area
-            generated_configs[-1]['init_particle_pos'] = init_pos
 
             print('config {}: camera params {}, flatten area: {}'.format(i, config['camera_params'], generated_configs[-1]['flatten_area']))
 

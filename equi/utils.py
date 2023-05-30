@@ -766,7 +766,7 @@ def fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, 
         picker_pos = env.action_tool._get_pos()[0]
         dis = target_pos - picker_pos
         norm = np.linalg.norm(dis, axis=1)
-        action = np.clip(dis, -0.05, 0.05) / 0.08
+        action = np.clip(dis, -0.08, 0.08) / 0.08
         action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
         next_picker_state = get_picker_state(env)
@@ -804,7 +804,7 @@ def fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, 
         picker_pos = env.action_tool._get_pos()[0]
         dis = target_pos - picker_pos
         norm = np.linalg.norm(dis, axis=1)
-        action = np.clip(dis, -0.03, 0.03) / 0.08
+        action = np.clip(dis, -0.08, 0.08) / 0.08
         action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
         next_picker_state = get_picker_state(env)
@@ -942,9 +942,9 @@ def fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, 
         episode_step += 1
         obs = next_obs
         picker_state = next_picker_state
-        if episode_step == env.horizon or done or info['normalized_performance'] > 0.95:
+        if episode_step == env.horizon or info['normalized_performance'] > 0.95:
             return None
-        if (norm < thresh).all() or count_reset >= 6:
+        if (norm < thresh).all() or count_reset >= 3:
             break
     final_step.append(episode_step)
     return [episode_step, obs, picker_state]

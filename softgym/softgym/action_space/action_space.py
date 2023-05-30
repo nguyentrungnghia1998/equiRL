@@ -63,10 +63,8 @@ class Picker(ActionToolBase):
         r = np.sqrt(self.num_picker - 1) * self.picker_radius * 6.
         pos = []
         for i in range(self.num_picker):
-            # x = center[0] + np.sin(2 * np.pi * i / self.num_picker) * r
             x = center[0] + np.cos(2 * np.pi * (self.num_picker - i - 1) / self.num_picker) * r
             y = center[1]
-            # z = center[2] + np.cos(2 * np.pi * i / self.num_picker) * r
             z = center[2] + np.sin(2 * np.pi * i / self.num_picker) * r
 
             pos.append([x, y, z])
@@ -161,7 +159,6 @@ class Picker(ActionToolBase):
 
         # check for e.g., rope, the picker is not dragging the particles too far away that violates the actual physicals constraints.
         if self.init_particle_pos is not None:
-            assert self.init_particle_pos.shape == particle_pos.shape
             picked_particle_idices = []
             active_picker_indices = []
             for i in range(self.num_picker):

@@ -511,7 +511,7 @@ def main(args):
                 break
             else:
                 episode_step, obs, picker_state = pick_choosen[0], pick_choosen[1], pick_choosen[2]
-            final_step.append(episode_step)
+            final_step.append(episode_step-1)
             # fling primitive
             fling = utils.fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data, final_step)
             if fling == 1 and count == 2:
@@ -524,6 +524,7 @@ def main(args):
       
         if flag_reset:
             continue
+        
         Demo_Final_Step.append(final_step)
         Demo_Length.append(len(frames))
         # save rgb video (128x128x3) and depth video (128x128)
@@ -559,10 +560,8 @@ def main(args):
             print('==================== FINISH COLLECTING DEMONSTRATIONS ====================')
             break
     
-    df = pd.DataFrame({'RGB_Path': Demo_RGB, 'Depth_Path': Demo_Depth, 'Length': Demo_Length, 'Final_step': Demo_Final_Step, 'Action': Demo_NPY})
-    demo_csv_path = os.path.join(video_dir, 'demo.csv')
-    df.to_csv(demo_csv_path, index=False)
-    # exit()
+    df = pd.DataFrame({'RGB_Path': Demo_RGB, 'Depth_Path': Demo_Depth, 'Length': Demo_Length, 'Final_step': Demo_Final_Step, 'NPY_Path': Demo_NPY})
+    df.to_csv(os.path.join(video_dir, 'demo.csv'), index=False)
 
     for i in range(args.num_demonstrations//20):
         sub_all_frames_planner = all_frames_planner[i*20:(i+1)*20] 
