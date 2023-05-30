@@ -81,8 +81,9 @@ class ClothFlattenEnv(ClothEnv):
             center_object()
 
             if self.action_mode == 'sphere' or self.action_mode.startswith('picker'):
-                curr_pos = pyflex.get_positions()
-                self.action_tool.reset(curr_pos[pickpoint * 4:pickpoint * 4 + 3] + [0., 0.2, 0.])
+                # curr_pos = pyflex.get_positions()
+                # self.action_tool.reset(curr_pos[pickpoint * 4:pickpoint * 4 + 3] + [0., 0.3, 0.])
+                self.action_tool.reset([0., 0.3, 0.0])
             generated_configs.append(deepcopy(config))
             generated_states.append(deepcopy(self.get_state()))
             self.current_config = config  # Needed in _set_to_flatten function
@@ -113,10 +114,9 @@ class ClothFlattenEnv(ClothEnv):
         """ Right now only use one initial state"""
         self.prev_covered_area = self._get_current_covered_area(pyflex.get_positions())
         if hasattr(self, 'action_tool'):
-            self.action_tool.init_particle_pos = self.get_current_config()['init_particle_pos']
-            curr_pos = pyflex.get_positions()
-            cx, cy = self._get_center_point(curr_pos)
-            self.action_tool.reset([cx, 0.2, cy])
+            # curr_pos = pyflex.get_positions()
+            # cx, cy = self._get_center_point(curr_pos)
+            self.action_tool.reset([0., 0.3, 0.0])
         pyflex.step()
         self.init_covered_area = None
         info = self._get_info()

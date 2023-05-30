@@ -1,9 +1,11 @@
 import numpy as np
+import pandas as pd
 import torch
 import os
 import time
 import json
 import copy
+import cv2
 
 from equi import utils
 from equi.logger import Logger
@@ -244,11 +246,12 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
                     if obs.shape[0] == 1:
                         obs = obs[0]
                     
-                with utils.eval_mode(agent):
-                    if sample_stochastically:
-                        action = agent.sample_action(obs, picker_state)
-                    else:
-                        action = agent.select_action(obs, picker_state)
+                # with utils.eval_mode(agent):
+                #     if sample_stochastically:
+                #         action = agent.sample_action(obs, picker_state)
+                #     else:
+                #         action = agent.select_action(obs, picker_state)
+                action = np.array([1, 0, 0, 0, -1, 0, 0, 0])
                 obs, reward, done, info = env.step(action)
                 picker_state = utils.get_picker_state(env)
                 episode_reward += reward
@@ -288,6 +291,7 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
 
     run_eval_loop(sample_stochastically=False)
     L.dump(step)
+    exit()
 
 def make_agent(obs_shape, action_shape, args, device):
     if args.agent == 'sac':
@@ -446,27 +450,54 @@ def main(args):
             image_size=args.image_size,
         )
 
-    agent = make_agent(
-        obs_shape=obs_shape,
-        action_shape=action_shape,
-        args=args,
-        device=device
-    )
+    # agent = make_agent(
+    #     obs_shape=obs_shape,
+    #     action_shape=action_shape,
+    #     args=args,
+    #     device=device
+    # )
+    agent = None
     
-    print('==================== START COLLECTING DEMONSTRATIONS ====================')
+    print(f'[INFO] ==================== START COLLECTING {args.num_demonstrations} DEMONSTRATIONS ====================')
+    
+    demo_rgb = os.path.join(video_dir, 'demo_rgb')
+    demo_depth = os.path.join(video_dir, 'demo_depth')
+    demo_npy = os.path.join(video_dir, 'demo_npy')
+
+    if not os.path.exists(demo_rgb):
+        os.makedirs(demo_rgb, exist_ok=True)
+
+    if not os.path.exists(demo_depth):
+        os.makedirs(demo_depth, exist_ok=True)
+
+    if not os.path.exists(demo_npy):
+        os.makedirs(demo_npy, exist_ok=True)
+
     all_frames_planner = []
     all_expert_data_planner = []
-    thresh = env.cloth_particle_radius + env.action_tool.picker_radius + env.action_tool.picker_threshold
     count_planner = 0
-    
+    thresh = env.cloth_particle_radius + env.action_tool.picker_radius + env.action_tool.picker_threshold
+
+    Demo_RGB = []
+    Demo_Depth = []
+    Demo_Length = []
+    Demo_Final_Step = []
+    Demo_NPY = []
+
     while True:
         obs = env.reset()
         picker_state = utils.get_picker_state(env)
         episode_step = 0
         frames = [env.get_image(128, 128)]
         expert_data = []
+        final_step = []
         flag_reset = False
+        count = 0
         while True:
+            count += 1
+            if count >= 3:
+                flag_reset = True
+                break
             # choose random boundary point
             choosen_id = utils.choose_random_particle_from_boundary(env)
             if choosen_id is None:
@@ -475,56 +506,70 @@ def main(args):
                 break
             # move to two choosen boundary points and pick them
             pick_choosen = utils.pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
-            if pick_choosen == 1:
-                count_planner += 1
-                break
             if pick_choosen is None:
                 flag_reset = True
                 break
             else:
                 episode_step, obs, picker_state = pick_choosen[0], pick_choosen[1], pick_choosen[2]
-            # Randomly choose primitive between fling and pick&drag
-            if np.random.rand() < 0.5:
-                # fling primitive
-                fling = utils.fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
-                if fling == 1:
-                    count_planner += 1
-                    break
-                if fling is None:
-                    flag_reset = True
-                    break
-                episode_step, obs, picker_state = fling[0], fling[1], fling[2]
-            else:
-                # pick&drag primitive
-                pick_drag = utils.pick_drag_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
-                if pick_drag == 1:
-                    count_planner += 1
-                    break
-                if pick_drag is None:
-                    flag_reset = True
-                    break
-                episode_step, obs, picker_state = pick_drag[0], pick_drag[1], pick_drag[2]
-            # release the cloth
-            release = utils.give_up_the_cloth(env, obs, picker_state, episode_step, frames, expert_data)
-            if release == 1:
+            final_step.append(episode_step)
+            # fling primitive
+            fling = utils.fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data, final_step)
+            if fling == 1 and count == 2:
                 count_planner += 1
                 break
-            if release is None:
+            if fling is None or (fling == 1 and count != 2):
                 flag_reset = True
                 break
-            episode_step, obs, picker_state = release[0], release[1], release[2]
+            episode_step, obs, picker_state = fling[0], fling[1], fling[2]
+      
         if flag_reset:
             continue
+        Demo_Final_Step.append(final_step)
+        Demo_Length.append(len(frames))
+        # save rgb video (128x128x3) and depth video (128x128)
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        rgb_path = os.path.join(demo_rgb, f'rgb_{count_planner}.mp4')
+        out_rgb = cv2.VideoWriter(rgb_path, fourcc, 30.0, (args.image_size, args.image_size))
+        for frame in frames:
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            out_rgb.write(frame)
+        out_rgb.release()
+        Demo_RGB.append(os.path.abspath(rgb_path))
+        
+        depth_path = os.path.join(demo_depth, f'depth_{count_planner}.mp4')
+        out_depth = cv2.VideoWriter(depth_path, fourcc, 30.0, (args.image_size, args.image_size), 0)
+        for frame in expert_data:
+            out_depth.write(frame[0][0, -1, ...].numpy())
+        out_depth.release()
+        Demo_Depth.append(os.path.abspath(depth_path))
+        
+        # save expert data type list to npy file
+        expert_data_path = os.path.join(demo_npy, f'data_{count_planner}.npy')
+        np.save(expert_data_path, expert_data)
+        Demo_NPY.append(os.path.abspath(expert_data_path))
+
         if len(frames) != env.horizon + 1:
             for _ in range(env.horizon + 1 - len(frames)):
-                frames.append(env.get_image(128, 128))
+                frames.append(env.get_image(args.image_size, args.image_size))
+ 
         all_frames_planner.append(frames)
         all_expert_data_planner.append(expert_data)
         print('[INFO]Collected {} demonstrations in {} steps'.format(count_planner, len(expert_data)))
         if count_planner == args.num_demonstrations:
             print('==================== FINISH COLLECTING DEMONSTRATIONS ====================')
             break
+    
+    df = pd.DataFrame({'RGB_Path': Demo_RGB, 'Depth_Path': Demo_Depth, 'Length': Demo_Length, 'Final_step': Demo_Final_Step, 'Action': Demo_NPY})
+    demo_csv_path = os.path.join(video_dir, 'demo.csv')
+    df.to_csv(demo_csv_path, index=False)
+    # exit()
 
+    for i in range(args.num_demonstrations//20):
+        sub_all_frames_planner = all_frames_planner[i*20:(i+1)*20] 
+        sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
+        sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=4, padding=3) for frame in sub_all_frames_planner])
+        save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'expert_{}.gif'.format(i)))
+    
     for i in all_expert_data_planner:
         r = []
         for j in i:
@@ -540,19 +585,15 @@ def main(args):
     plt.ylabel('Reward')
     plt.title('Reward over time')
     plt.savefig(os.path.join(video_dir, 'reward.png'))
+    exit()
         
 
-    for i in range(args.num_demonstrations//20):
-        sub_all_frames_planner = all_frames_planner[i*20:(i+1)*20] 
-        sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
-        sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in sub_all_frames_planner])
-        save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'expert_{}.gif'.format(i)))
 
-    for i in range(10000):
-        print(f'Train {i} step')
-        agent.update(replay_buffer, L, i, p_beta_schedule)
+    # for i in range(10000):
+    #     print(f'Train {i} step')
+    #     agent.update(replay_buffer, L, i, p_beta_schedule)
         
-    # exit()
+    exit()
 
     episode, episode_reward, done, ep_info = 0, 0, True, []
     start_time = time.time()

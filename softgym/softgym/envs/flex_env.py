@@ -226,20 +226,9 @@ class FlexEnv(gym.Env):
             img, depth = pyflex.render()
             width, height = self.camera_params['default_camera']['width'], self.camera_params['default_camera']['height']
             img = img.reshape(height, width, 4)[::-1, :, :3]  # Need to reverse the height dimension
-            # _, depth = pyflex.render_cloth()
             depth = depth.reshape(height, width)[::-1]
-            # depth[depth>5] = 0
-            # import ipdb; ipdb.set_trace()
-            # depth = depth/np.max(depth)
-            depth  = (1.6 - depth) / 0.6
-            # print hist of depth
-            # import matplotlib.pyplot as plt
-            # plt.hist(depth.flatten(), bins=10)
-            # plt.show()
-            # save hist plot
-            # plt.savefig('depth_hist1.png')
-            # plt.imsave('depth.png', depth, cmap='gray')
-            # exit()
+            depth[depth>1.5] = 0
+            depth = depth/0.9
             return img, depth
         elif mode == 'human':
             raise NotImplementedError
@@ -255,8 +244,6 @@ class FlexEnv(gym.Env):
     def get_image_with_depth(self, width=720, height=720, get_image = True):
         """ use pyflex.render to get a rendered image. """
         img, depth= self.render(mode='rgb_depth')
-        # img = img.astype(np.float32)
-        # import ipdb; ipdb.set_trace()
         img = img.astype(np.uint8)
         depth = np.expand_dims(depth*255.0, axis=2)
         depth = depth.astype(np.uint8)
