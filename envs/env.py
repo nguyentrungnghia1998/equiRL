@@ -7,6 +7,8 @@ from gym.spaces import Box
 
 from softgym.registered_env import SOFTGYM_ENVS
 from softgym.utils.normalized_env import normalize
+from scipy.spatial import ConvexHull
+
 
 softgym.register_flex_envs()
 
@@ -99,7 +101,7 @@ class SoftGymEnv(object):
                 # done = True
                 # import ipdb; ipdb.set_trace()
 
-            if info['normalized_performance'] >= 1.0:
+            if info['normalized_performance'] >= 1.0 and (ps is None for ps in self._env.action_tool.picked_particles):
                 done = True
             # if reward == 1.0:
                 # done = True

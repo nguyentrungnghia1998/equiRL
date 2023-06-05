@@ -56,7 +56,7 @@ def main():
     parser.add_argument('--env_name', default='ClothFlatten')
     parser.add_argument('--log_dir', default='./data/curl/')
     parser.add_argument('--test_episodes', default=10, type=int)
-    parser.add_argument('--seed', default=100, type=int)
+    parser.add_argument('--seed', default=10, type=int)
     parser.add_argument('--save_tb', default=False)  # Save stats to tensorbard
     parser.add_argument('--save_video', default=True)
     parser.add_argument('--save_model', default=True)  # Save trained models

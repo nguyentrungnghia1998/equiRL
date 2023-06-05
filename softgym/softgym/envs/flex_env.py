@@ -220,6 +220,14 @@ class FlexEnv(gym.Env):
             width, height = self.camera_params['default_camera']['width'], self.camera_params['default_camera']['height']
             img = img.reshape(height, width, 4)[::-1, :, :3]  # Need to reverse the height dimension
             return img
+        elif mode == 'rgb_depth':
+            img, depth = pyflex.render()
+            width, height = self.camera_params['default_camera']['width'], self.camera_params['default_camera']['height']
+            img = img.reshape(height, width, 4)[::-1, :, :3]  # Need to reverse the height dimension
+            depth = depth.reshape(height, width)[::-1]
+            depth[depth>5] = 0
+            depth = depth/0.9
+            return img, depth
         elif mode == 'human':
             raise NotImplementedError
 
@@ -230,6 +238,20 @@ class FlexEnv(gym.Env):
         if width != img.shape[0] or height != img.shape[1]:
             img = cv2.resize(img, (width, height))
         return img
+
+    def get_image_with_depth(self, width=720, height=720, get_image = True):
+        """ use pyflex.render to get a rendered image. """
+        img, depth= self.render(mode='rgb_depth')
+        img = img.astype(np.uint8)
+        depth = np.expand_dims(depth*255.0, axis=2)
+        depth = depth.astype(np.uint8)
+        if width != img.shape[0] or height != img.shape[1]:
+            img = cv2.resize(img, (width, height))
+            depth = cv2.resize(depth, (width, height))
+        if get_image:
+            return np.concatenate((img, depth), axis=2) 
+        else:
+            return depth
 
     def set_scene(self, config, state=None):
         """ Set up the flex scene """

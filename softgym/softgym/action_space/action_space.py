@@ -60,12 +60,13 @@ class Picker(ActionToolBase):
         return clipped_picker_pos
 
     def _get_centered_picker_pos(self, center):
-        r = np.sqrt(self.num_picker - 1) * self.picker_radius * 2.
+        r = np.sqrt(self.num_picker - 1) * self.picker_radius * 6.
         pos = []
         for i in range(self.num_picker):
-            x = center[0] + np.sin(2 * np.pi * i / self.num_picker) * r
+            x = center[0] + np.cos(2 * np.pi * (self.num_picker - i - 1) / self.num_picker) * r
             y = center[1]
-            z = center[2] + np.cos(2 * np.pi * i / self.num_picker) * r
+            z = center[2] + np.sin(2 * np.pi * i / self.num_picker) * r
+
             pos.append([x, y, z])
         return np.array(pos)
 

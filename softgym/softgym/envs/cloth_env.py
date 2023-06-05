@@ -20,7 +20,7 @@ class ClothEnv(FlexEnv):
 
         if action_mode == 'picker':
             self.action_tool = Picker(num_picker, picker_radius=picker_radius, particle_radius=particle_radius, picker_threshold=picker_threshold,
-                                      picker_low=(-0.4, 0., -0.4), picker_high=(1.0, 0.5, 0.4))
+                                      picker_low=(-1.0, 0., -1.0), picker_high=(1.0, 0.75, 1.0))
             self.action_space = self.action_tool.action_space
             self.picker_radius = picker_radius
         elif action_mode == 'pickerpickplace':
@@ -93,7 +93,7 @@ class ClothEnv(FlexEnv):
         if self.action_mode in ['sawyer', 'franka']:
             cam_pos, cam_angle = np.array([0.0, 1.62576, 1.04091]), np.array([0.0, -0.844739, 0])
         else:
-            cam_pos, cam_angle = np.array([0.0, 0.82, 0.0]), np.array([0, -0.5 * np.pi, 0.])
+            cam_pos, cam_angle = np.array([0.0, 0.9, 0.0]), np.array([0, -0.5 * np.pi, 0.])
         config = {
             'ClothPos': [-1.6, 2.0, -0.8],
             'ClothSize': [int(0.6 / particle_radius), int(0.368 / particle_radius)],
