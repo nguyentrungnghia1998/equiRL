@@ -456,6 +456,9 @@ def main(args):
     #     args=args,
     #     device=device
     # )
+    thresh = env.cloth_particle_radius + env.action_tool.picker_radius + env.action_tool.picker_threshold
+    utils.pick_and_drag(env, thresh, img_size=224)
+    exit()
     agent = None
     
     print(f'[INFO] ==================== START COLLECTING {args.num_demonstrations} DEMONSTRATIONS ====================')
@@ -476,7 +479,6 @@ def main(args):
     all_frames_planner = []
     all_expert_data_planner = []
     count_planner = 0
-    thresh = env.cloth_particle_radius + env.action_tool.picker_radius + env.action_tool.picker_threshold
 
     Demo_RGB = []
     Demo_Depth = []

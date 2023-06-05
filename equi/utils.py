@@ -17,6 +17,7 @@ from equi.segment_tree import SumSegmentTree, MinSegmentTree
 from matplotlib import pyplot as plt
 from PIL import Image
 from scipy.spatial import ConvexHull
+from softgym.utils.visualization import save_numpy_as_gif, make_grid
 
 
 
@@ -948,6 +949,170 @@ def fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, 
             break
     final_step.append(episode_step)
     return [episode_step, obs, picker_state]
+
+def pick_and_drag(env, thresh, img_size=128):
+    obs = env.reset()
+    frames = []
+    expert_data = []
+    episode_step = 0
+    final_step = []
+    
+    env._set_to_flatten()
+    frames.append(env.get_image(img_size, img_size))
+    picker_state = get_picker_state(env)
+
+    picker_pos, particle_pos = env.action_tool._get_pos()
+    corner = env._get_key_point_idx()
+    rand_id = np.random.randint(0, 4)
+    choosen_id = corner[rand_id]
+    target_pos = picker_pos
+    if particle_pos[choosen_id, 0] >= 0:
+        target_pos[1, :] = particle_pos[choosen_id, :3]
+        left = 0
+    else:
+        target_pos[0, :] = particle_pos[choosen_id, :3]
+        left = 1
+    
+    count = 0
+    while True:
+        count += 1
+        picker_pos, _ = env.action_tool._get_pos()
+        dis = target_pos - picker_pos
+        norm = np.linalg.norm(dis, axis=1)
+        action = np.clip(dis, -0.08, 0.08) / 0.08
+        action = np.concatenate([action, np.zeros((2, 1))], axis=1)
+        if (norm <= thresh).all():
+            if left:
+                action[1, -1] = 1
+            else:
+                action[0, -1] = 1
+        action = action.reshape(-1)
+        next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
+        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
+        frames.append(env.get_image(img_size, img_size))
+        episode_step += 1
+        obs = next_obs
+        picker_state = next_picker_state
+        if left and picker_state[0] == 1:
+            break
+        if not left and picker_state[1] == 1:
+            break
+        if count >= 10:
+            break
+    
+    # lift a little bit
+    for _ in range(2):
+        if left:
+            action = np.array([0.0, 0.35, 0.0, 1, 0.0, 0.0, 0.0, 0])
+        else:
+            action = np.array([0.0, 0.0, 0.0, 0, 0.0, 0.35, 0.0, 1])
+        next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
+        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
+        frames.append(env.get_image(img_size, img_size))
+        episode_step += 1
+        obs = next_obs
+        picker_state = next_picker_state
+
+    # choose one random point in particle_pos
+    while True:
+        choosen_id_ = np.random.randint(0, len(particle_pos))
+        if np.linalg.norm(particle_pos[choosen_id_, [0, 2]] - picker_pos[0, [0, 2]]) <= 0.33 and np.linalg.norm(particle_pos[choosen_id_, [0, 2]] - picker_pos[0, [0, 2]]) >= 0.1 and left:
+            break
+        if np.linalg.norm(particle_pos[choosen_id_, [0, 2]] - picker_pos[1, [0, 2]]) <= 0.33 and np.linalg.norm(particle_pos[choosen_id_, [0, 2]] - picker_pos[1, [0, 2]]) >= 0.1 and not left:
+            break
+
+    # move to the choosen point
+    target_pos = picker_pos
+    if left:
+        target_pos[0, :] = particle_pos[choosen_id_, :3]
+        target_pos[0, 1] += 0.04
+    else:
+        target_pos[1, :] = particle_pos[choosen_id_, :3]
+        target_pos[1, 1] += 0.04
+    count = 0
+    while True:
+        count += 1
+        picker_pos, _ = env.action_tool._get_pos()
+        dis = target_pos - picker_pos
+        norm = np.linalg.norm(dis, axis=1)
+        action = np.clip(dis, -0.03, 0.03) / 0.08
+        action = np.concatenate([action, np.zeros((2, 1))], axis=1)
+        if left:
+            action[0, -1] = 1
+        else:
+            action[1, -1] = 1
+        action = action.reshape(-1)
+        next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
+        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
+        frames.append(env.get_image(img_size, img_size))
+        episode_step += 1
+        obs = next_obs
+        picker_state = next_picker_state
+        if (norm <= thresh).all():
+            break
+    
+    # throw the cloth
+    action = np.array([0.0, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0])
+    next_obs, reward, done, info = env.step(action)
+    next_picker_state = get_picker_state(env)
+    expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
+    frames.append(env.get_image(img_size, img_size))
+    episode_step += 1
+    obs = next_obs
+    picker_state = next_picker_state
+
+    picker_pos, particle_pos = env.action_tool._get_pos()
+    target_pos = picker_pos
+    if left:
+        target_pos[0, :] = [-0.3, 0.3, 0.0]
+    else:
+        target_pos[1, :] = [0.3, 0.3, 0.0]
+    while True:
+        picker_pos, _ = env.action_tool._get_pos()
+        dis = target_pos - picker_pos
+        norm = np.linalg.norm(dis, axis=1)
+        action = np.clip(dis, -0.08, 0.08) / 0.08
+        action = np.concatenate([action, np.zeros((2, 1))], axis=1)
+        action = action.reshape(-1)
+        next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
+        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
+        frames.append(env.get_image(img_size, img_size))
+        episode_step += 1
+        obs = next_obs
+        picker_state = next_picker_state
+        if (norm <= thresh).all():
+            break
+
+    # take the action
+    acts = []
+    for i in reversed(expert_data):
+        act = i[1]
+        act = act.reshape(2, -1)
+        act[:, :3] *= -1
+        act = act.reshape(-1)
+        acts.append(act)
+
+    for i in range(len(acts)):
+        action = acts[i]
+        next_obs, reward, done, info = env.step(action)
+        frames.append(env.get_image(img_size, img_size))
+        
+
+
+    save_numpy_as_gif(np.array(frames), './pick_and_drag.gif')
+    print('Video generated and save to {}'.format('./pick_and_drag.gif'))
+
+
+    
+    
+        
+
+
+
 
 def get_picker_state(env):
     picker_state = []

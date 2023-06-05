@@ -227,7 +227,7 @@ class FlexEnv(gym.Env):
             width, height = self.camera_params['default_camera']['width'], self.camera_params['default_camera']['height']
             img = img.reshape(height, width, 4)[::-1, :, :3]  # Need to reverse the height dimension
             depth = depth.reshape(height, width)[::-1]
-            depth[depth>1.5] = 0
+            depth[depth>5] = 0
             depth = depth/0.9
             return img, depth
         elif mode == 'human':
