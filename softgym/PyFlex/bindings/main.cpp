@@ -120,6 +120,9 @@ int g_screenWidth = 720;
 int g_screenHeight = 720;
 int g_msaaSamples = 0;
 
+float fov = kPi / 2.0f;
+
+
 int g_numSubsteps;
 
 // a setting of -1 means Flex will use the device specified in the NVIDIA control panel
@@ -1337,7 +1340,7 @@ void RenderScene() {
     //---------------------------------------
     // setup view and state
 
-    float fov = kPi / 4.0f;
+    // float fov = kPi / 4.0f;
     float aspect = float(g_screenWidth) / g_screenHeight;
 
     Matrix44 proj = ProjectionMatrix(RadToDeg(fov), aspect, g_camNear, g_camFar);
