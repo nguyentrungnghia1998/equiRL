@@ -1411,6 +1411,7 @@ def create_demonstration(env,
                     play_frames.append(frames[i+1])
                     play_data.append(expert_data[i])
                 all_play_data_planner.append(play_data)
+                all_play_frames_planner.append(play_frames)
                 count_play_planner += 1
                 play_data_path = os.path.join(play_npy, f'data_{count_play_planner}.npy')
                 np.save(play_data_path, play_data)
@@ -1486,24 +1487,21 @@ def create_demonstration(env,
         play_data = play_data[:env.horizon]
         play_frames = play_frames[:env.horizon+1]
         all_play_data_planner.append(play_data)
+        all_play_frames_planner.append(play_frames)
         count_play_planner += 1
         play_data_path = os.path.join(play_npy, f'data_{count_play_planner}.npy')
         np.save(play_data_path, play_data)
         PLAY_NPY.append(os.path.abspath(play_data_path))
         print('[INFO]Collected {} play data'.format(count_play_planner))
 
-    # play_df = pd.DataFrame({'NPY_Path': PLAY_NPY})
-    # play_df.to_csv(os.path.join(video_dir, 'play.csv'), index=False)
-    # for i in range(100//20):
-    #     sub_all_frames_planner = all_play_data_planner[i*20:(i+1)*20] 
-    #     sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
-    #     sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=4, padding=3) for frame in sub_all_frames_planner])
-    #     save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'play_{}.gif'.format(i)))
-    
+    play_df = pd.DataFrame({'NPY_Path': PLAY_NPY})
+    play_df.to_csv(os.path.join(video_dir, 'play.csv'), index=False)
+    for i in range(len(all_play_data_planner)//20):
+        sub_all_frames_planner = all_play_frames_planner[i*20:(i+1)*20] 
+        sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
+        sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=4, padding=3) for frame in sub_all_frames_planner])
+        save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'play_{}.gif'.format(i)))
     return all_expert_data_planner, all_play_data_planner
-
-
-
 
 def get_picker_state(env):
     picker_state = []
