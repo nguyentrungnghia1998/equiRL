@@ -6,6 +6,7 @@ softgym/softgym/cached_initial_states/*
 .history/*
 
 
+
 softgym/softgym/cached_initial_states/*
 softgym/softgym/envs/corl_cached_state_backup
 softgym/data
