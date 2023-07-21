@@ -1,0 +1,3 @@
+[submodule "my_soft_gym"]
+	path = softgym/
+	url = git@github.com:nguyentrungnghia1998/my_soft_gym.git

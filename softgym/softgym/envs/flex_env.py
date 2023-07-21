@@ -105,8 +105,7 @@ class FlexEnv(gym.Env):
             self.camera_params[camera_name] = camera_param
         else:
             camera_param = self.camera_params[camera_name]
-        pyflex.set_camera_params(
-            np.array([*camera_param['pos'], *camera_param['angle'], camera_param['width'], camera_param['height']]))
+        pyflex.set_camera_params(np.array([*camera_param['pos'], *camera_param['angle'], camera_param['width'], camera_param['height']]))
 
     def get_state(self):
         pos = pyflex.get_positions()
@@ -114,7 +113,11 @@ class FlexEnv(gym.Env):
         shape_pos = pyflex.get_shape_states()
         phase = pyflex.get_phases()
         camera_params = copy.deepcopy(self.camera_params)
-        return {'particle_pos': pos, 'particle_vel': vel, 'shape_pos': shape_pos, 'phase': phase, 'camera_params': camera_params,
+        return {'particle_pos': pos, 
+                'particle_vel': vel, 
+                'shape_pos': shape_pos, 
+                'phase': phase, 
+                'camera_params': camera_params,
                 'config_id': self.current_config_id}
 
     def set_state(self, state_dict):
@@ -150,10 +153,10 @@ class FlexEnv(gym.Env):
             save_numpy_as_gif(np.array(self.video_frames), video_path, **kwargs)
         del self.video_frames
 
-    def reset(self, config=None, initial_state=None, config_id=None):
+    def reset(self, config=None, initial_state=None, config_id=None, eval_flag = False):
         if config is None:
             if config_id is None:
-                if self.eval_flag:
+                if eval_flag:
                     eval_beg = int(0.8 * len(self.cached_configs))
                     config_id = np.random.randint(low=eval_beg, high=len(self.cached_configs)) if not self.deterministic else eval_beg
                 else:
@@ -183,6 +186,7 @@ class FlexEnv(gym.Env):
                 frames.append(self.get_image(img_size, img_size))
         obs = self._get_obs()
         reward = self.compute_reward(action, obs, set_prev_reward=True)
+        reward = reward / self.current_config['flatten_area']
         info = self._get_info()
 
         if self.recording:
@@ -190,8 +194,6 @@ class FlexEnv(gym.Env):
         self.time_step += 1
 
         done = False
-        if self.time_step >= self.horizon:
-            done = True
         if record_continuous_video:
             info['flex_env_recorded_frames'] = frames
         return obs, reward, done, info

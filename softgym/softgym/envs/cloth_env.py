@@ -8,13 +8,14 @@ from copy import deepcopy
 
 
 class ClothEnv(FlexEnv):
-    def __init__(self, observation_mode, action_mode, num_picker=2, render_mode='particle', picker_radius=0.05, picker_threshold=0.005, particle_radius=0.00625, **kwargs):
+    def __init__(self, observation_mode, action_mode, num_picker=2, render_mode='particle', picker_radius=0.03, picker_threshold=0.005, particle_radius=0.00625, use_picker_state = False, **kwargs):
         self.render_mode = render_mode
         self.action_mode = action_mode
         self.cloth_particle_radius = particle_radius
+        self.use_picker_state = use_picker_state
         super().__init__(**kwargs)
 
-        assert observation_mode in ['key_point', 'point_cloud', 'cam_rgb']
+        assert observation_mode in ['key_point', 'point_cloud', 'cam_rgb', 'img_depth', 'only_depth']
         assert action_mode in ['picker', 'pickerpickplace', 'sawyer', 'franka', 'picker_qpg']
         self.observation_mode = observation_mode
 
@@ -51,8 +52,13 @@ class ClothEnv(FlexEnv):
                 raise NotImplementedError
             self.observation_space = Box(np.array([-np.inf] * obs_dim), np.array([np.inf] * obs_dim), dtype=np.float32)
         elif observation_mode == 'cam_rgb':
-            self.observation_space = Box(low=-np.inf, high=np.inf, shape=(self.camera_height, self.camera_width, 3),
-                                         dtype=np.float32)
+            self.observation_space = Box(low=-np.inf, high=np.inf, shape=(self.camera_height, self.camera_width, 3), dtype=np.float32)
+
+        elif observation_mode == 'img_depth':
+            self.observation_space = Box(low=-np.inf, high=np.inf, shape=(self.camera_height, self.camera_width, 4), dtype=np.float32)
+
+        elif observation_mode == 'only_depth':
+            self.observation_space = Box(low=-np.inf, high=np.inf, shape=(self.camera_height, self.camera_width, 1), dtype=np.float32)
 
     def _sample_cloth_size(self):
         return np.random.randint(60, 120), np.random.randint(60, 120)
@@ -111,7 +117,18 @@ class ClothEnv(FlexEnv):
 
     def _get_obs(self):
         if self.observation_mode == 'cam_rgb':
-            return self.get_image(self.camera_height, self.camera_width)
+            output = self.get_image(self.camera_height, self.camera_width)
+        if self.observation_mode == 'img_depth':
+            output = self.get_image_with_depth(self.camera_height, self.camera_width)
+        if self.observation_mode == 'only_depth':
+            output = self.get_image_with_depth(self.camera_height, self.camera_width, get_image=False)
+        if self.observation_mode in ['cam_rgb','img_depth','only_depth']:
+            if self.use_picker_state:
+                picked = [0 if item is None else 255 for item in self.action_tool.picked_particles]
+                picked = np.tile(picked,(self.camera_height,self.camera_width,1))
+                return np.concatenate((output, picked.astype(np.uint8)), axis=2) 
+            else:
+                return output
         if self.observation_mode == 'point_cloud':
             particle_pos = np.array(pyflex.get_positions()).reshape([-1, 4])[:, :3].flatten()
             pos = np.zeros(shape=self.particle_obs_dim, dtype=np.float)

@@ -66,8 +66,9 @@ def main():
     parser.add_argument('--init_temperature', default=0.1, type=float)
     parser.add_argument('--replay_buffer_capacity', default=100000)
     parser.add_argument('--batch_size', default=8)
-    parser.add_argument('--train_length', default = 30)
-    parser.add_argument("--use_GMM", default=False, action = 'store_true')
+    parser.add_argument('--train_length', default = 30, type = int)
+    parser.add_argument("--use_GMM", default=True, action = 'store_true')
+    parser.add_argument("--collect_demonstration", default=False, action = 'store_true')
 
     # Override environment arguments
     parser.add_argument('--env_kwargs_render', default=True, type=bool)  # Turn off rendering can speed up training

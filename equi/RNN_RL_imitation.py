@@ -23,6 +23,7 @@ import wandb
 import gc
 from utils import RNN_actor, BC_RNN_actor, BC_RNN_GMM_actor
 from torch.utils.data import TensorDataset, DataLoader 
+import pandas as pd
 
 def test_equi(message, obs, picker_state, action, agent):
     act = agent.actor.act
@@ -359,6 +360,82 @@ def make_agent(obs_shape, action_shape, args, device):
     else:
         assert 'agent is not supported: %s' % args.agent
 
+def test_phase(env, actor, args, device, epoch, average_rewards, all_epoch, hidden_size = 128):
+    actor.eval()
+    test_episode = 8
+    sample_stochastically = True
+    infos = []
+    all_frames = []
+    final_rewards = []
+    plt.figure()
+    with torch.no_grad():
+        for i in range(test_episode):
+            obs = env.reset(eval_flag = True)
+            obs = obs/255.0
+            obs = obs.to(device)
+            picker_state = utils.get_picker_state(env)
+            done = False
+            episode_reward = 0
+            ep_info = []
+            frames = [env.get_image(128, 128)]
+            rewards = []
+            count = 0
+            h0 = torch.zeros(2,1,hidden_size).to(device)
+            c0 = torch.zeros(2,1,hidden_size).to(device)
+            while not done:
+                # if args.encoder_type == 'pixel':
+                #     if obs.shape[0] == 1:
+                #         obs = obs[0]
+                    
+                # with utils.eval_mode(agent):
+                #     if sample_stochastically:
+                #         action = agent.sample_action(obs, picker_state)
+                #     else:
+                #         action = agent.select_action(obs, picker_state)
+                obs = obs.unsqueeze(dim = 1)
+                picker_state = torch.Tensor(picker_state).unsqueeze(dim = 0).unsqueeze(dim = 0)
+                picker_state = picker_state.repeat_interleave(50,dim = 2)
+                picker_state = picker_state.to(device)
+                if args.use_GMM:
+                    dist, hn, cn = actor(obs, picker_state, (h0, c0), train = False)
+                    action = dist.sample()
+                    action = action.cpu().numpy()
+                else:
+                    action, hn, cn = actor(obs, picker_state, (h0,c0))
+                    action = action.detach().cpu().numpy()
+                obs, reward, done, info = env.step(action)
+                obs = obs/255.0
+                obs = obs.to(device)
+                picker_state = utils.get_picker_state(env)
+                episode_reward += reward
+                count += 1
+                ep_info.append(info)
+                frames.append(env.get_image(128, 128))
+                rewards.append(info['normalized_performance'])
+                if done:
+                    for i in range(env.horizon + 1 - count):
+                        frames.append(env.get_image(128, 128))
+                if count == env.horizon:
+                    done = True
+                h0 = hn
+                c0 = cn
+            final_rewards.append(rewards[-1])
+            plt.plot(range(len(rewards)), rewards)
+            if len(all_frames) < 8:
+                all_frames.append(frames)
+            infos.append(ep_info)
+
+    average_rewards.append(np.mean(final_rewards))
+    all_epoch.append(epoch)
+    
+    plt.xlabel('Timestep')
+    plt.ylabel('Reward')
+    plt.title('Reward over time')
+    plt.savefig(f"data/RNN_imitation/results/reward_epoch_{epoch}.png")
+
+    all_frames = np.array(all_frames).swapaxes(0, 1)
+    all_frames = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in all_frames])
+    save_numpy_as_gif(all_frames, f"data/RNN_imitation/results/policy_epoch_{epoch}.gif")
 
 def main(args):
     torch.cuda.empty_cache()
@@ -452,107 +529,44 @@ def main(args):
         actor = BC_RNN_GMM_actor(obs_shape = (1,128,128), device = device).to(device)
     else:
         actor = BC_RNN_actor(obs_shape=(1,128,128), device=device).to(device)
-    
-    print('==================== START COLLECTING DEMONSTRATIONS ====================')
-    all_frames_planner = []
-    all_expert_data_planner = []
-    thresh = env.cloth_particle_radius + env.action_tool.picker_radius + env.action_tool.picker_threshold
-    count_planner = 0
-    
-    while True:
-        obs = env.reset()
-        picker_state = utils.get_picker_state(env)
-        episode_step = 0
-        frames = [env.get_image(128, 128)]
-        expert_data = []
-        flag_reset = False
-        while True:
-            # choose random boundary point
-            choosen_id = utils.choose_random_particle_from_boundary(env)
-            if choosen_id is None:
-                print('[INFO] Cannot find boundary point!!!')
-                flag_reset = True
-                break
-            # move to two choosen boundary points and pick them
-            pick_choosen = utils.pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
-            if pick_choosen == 1:
-                count_planner += 1
-                break
-            if pick_choosen is None:
-                flag_reset = True
-                break
-            else:
-                episode_step, obs, picker_state = pick_choosen[0], pick_choosen[1], pick_choosen[2]
-            # Randomly choose primitive between fling and pick&drag
-            if np.random.rand() < 1.5:
-                # fling primitive
-                fling = utils.fling_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
-                if fling == 1:
-                    count_planner += 1
-                    break
-                if fling is None:
-                    flag_reset = True
-                    break
-                episode_step, obs, picker_state = fling[0], fling[1], fling[2]
-            else:
-                # pick&drag primitive
-                pick_drag = utils.pick_drag_primitive(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
-                if pick_drag == 1:
-                    count_planner += 1
-                    break
-                if pick_drag is None:
-                    flag_reset = True
-                    break
-                episode_step, obs, picker_state = pick_drag[0], pick_drag[1], pick_drag[2]
-            # release the cloth
-            release = utils.give_up_the_cloth(env, obs, picker_state, episode_step, frames, expert_data)
-            if release == 1:
-                count_planner += 1
-                break
-            if release is None:
-                flag_reset = True
-                break
-            episode_step, obs, picker_state = release[0], release[1], release[2]
-        if flag_reset:
-            continue
-        if len(frames) != env.horizon + 1:
-            for _ in range(env.horizon + 1 - len(frames)):
-                frames.append(env.get_image(128, 128))
-        all_frames_planner.append(frames)
-        all_expert_data_planner.append(expert_data)
-        print('[INFO]Collected {} demonstrations in {} steps'.format(count_planner, len(expert_data)))
-        if count_planner == args.num_demonstrations:
-            print('==================== FINISH COLLECTING DEMONSTRATIONS ====================')
-            break
-
+    if args.collect_demonstration:
+        utils.create_demonstration(env, video_dir=video_dir, num_demonstrations=args.num_demonstrations)
     obses = []
     actions = []
     rewards = []
-    for i in all_expert_data_planner:
+    picker_states = []
+    df_demon = pd.read_csv("data/RNN_imitation/video/demo.csv")
+    for path in df_demon['NPY_Path']:
         r = []
         obs_i = []
         action_i = []
-        if len(i)>=args.train_length:
+        picker_state_i = []
+        dataset = np.load(path, allow_pickle=True)
+        if dataset.shape[0]>=args.train_length:
             for j in range(1,args.train_length + 1):
-                data = i[-j]
+                data = dataset[-j,:]
                 r.insert(0,data[2])
                 obs_i.insert(0,data[0])
                 action_i.insert(0,data[1])
+                picker_state_i.append(data[5])
         else:
-            for j in range(len(i)):
-                data = i[j]
+            for j in range(dataset.shape[0]):
+                data = dataset[j,:]
                 r.append(data[2])
                 obs_i.append(data[0])
                 action_i.append(data[1])
-            data = i[0]
-            for j in range(args.train_length - len(i)):
+                picker_state_i.append(data[5])
+            data = dataset[0,:]
+            for j in range(args.train_length - dataset.shape[0]):
                 r.insert(0,data[2])
                 obs_i.insert(0,data[0])
                 action_i.insert(0,data[1])
+                picker_state_i.append(data[5])
         plt.plot(range(len(r)), r)  
         obses.append(obs_i)
         actions.append(action_i)
         rewards.append(r)
+        picker_states.append(picker_state_i)
     plt.xlabel('Timestep')
     plt.ylabel('Reward')
     plt.title('Reward over time')
@@ -564,9 +578,11 @@ def main(args):
 
     obses = torch.stack([torch.cat(obs) for obs in obses], dim = 0)
     obses = obses/255.0
+    picker_states = torch.Tensor(picker_states)
+    picker_states = picker_states.repeat_interleave(50, dim = 2)
     actions = torch.FloatTensor(actions)
 
-    dataset = TensorDataset(obses, actions)
+    dataset = TensorDataset(obses, picker_states, actions)
 
     data_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
@@ -603,14 +619,18 @@ def main(args):
     # plt.savefig("data/imitation/actor_loss.png")
     # plt.show()
 
-    for epoch in range(1000):
+    average_rewards = []
+    all_epoch = []
+
+    for epoch in range(3000):
         print(f'Train {epoch} step')
+        actor.train()
         running_loss = 0.0
         steps.append(epoch)
-        for i, (obs, action) in enumerate(data_loader):
-            obs, action = obs.to(device), action.to(device)
+        for i, (obs, picker_state, action) in enumerate(data_loader):
+            obs, picker_state, action = obs.to(device), picker_state.to(device), action.to(device)
             optimizer.zero_grad()
-            outputs, _, _ = actor(obs)
+            outputs, _, _ = actor(obs, picker_state)
             if args.use_GMM:
                 log_probs = outputs.log_prob(action)
                 loss = -log_probs.mean()
@@ -622,78 +642,16 @@ def main(args):
             running_loss += loss.item()
         losses.append(running_loss/len(data_loader))
         print(f"Epoch {epoch} train loss: {running_loss/len(data_loader)}")
+        if epoch % 200 == 0:
+            test_phase(env, actor, args, device, epoch, average_rewards, all_epoch)
 
     plt.plot(steps,losses)
     plt.savefig("data/RNN_imitation/actor_loss.png")
     plt.show()
+    plt.plot(all_epoch, average_rewards)
+    plt.savefig("data/RNN_imitation/average_rewards.png")
     plt.close()
 
 
+
     torch.save(actor.state_dict(),"data/RNN_imitation/actor_final.pt")
-
-    test_episode = 8
-    sample_stochastically = True
-    infos = []
-    all_frames = []
-    plt.figure()
-    with torch.no_grad():
-        for i in range(test_episode):
-            obs = env.reset(eval_flag = True)
-            obs = obs/255.0
-            obs = obs.to(device)
-            picker_state = utils.get_picker_state(env)
-            done = False
-            episode_reward = 0
-            ep_info = []
-            frames = [env.get_image(128, 128)]
-            rewards = []
-            count = 0
-            h0 = torch.zeros(2,1,200).to(device)
-            c0 = torch.zeros(2,1,200).to(device)
-            while not done:
-                # if args.encoder_type == 'pixel':
-                #     if obs.shape[0] == 1:
-                #         obs = obs[0]
-                    
-                # with utils.eval_mode(agent):
-                #     if sample_stochastically:
-                #         action = agent.sample_action(obs, picker_state)
-                #     else:
-                #         action = agent.select_action(obs, picker_state)
-                obs = obs.unsqueeze(dim = 1)
-                if args.use_GMM:
-                    dist, hn, cn = actor(obs, (h0, c0), train = False)
-                    action = dist.sample()
-                    action = action.cpu().numpy()
-                else:
-                    action, hn, cn = actor(obs, (h0,c0))
-                    action = action.detach().cpu().numpy()
-                obs, reward, done, info = env.step(action)
-                obs = obs/255.0
-                obs = obs.to(device)
-                picker_state = utils.get_picker_state(env)
-                episode_reward += reward
-                count += 1
-                ep_info.append(info)
-                frames.append(env.get_image(128, 128))
-                rewards.append(reward)
-                if done:
-                    for i in range(env.horizon + 1 - count):
-                        frames.append(env.get_image(128, 128))
-                if count == env.horizon:
-                    done = True
-                h0 = hn
-                c0 = cn
-            plt.plot(range(len(rewards)), rewards)
-            if len(all_frames) < 8:
-                all_frames.append(frames)
-            infos.append(ep_info)
-    
-    plt.xlabel('Timestep')
-    plt.ylabel('Reward')
-    plt.title('Reward over time')
-    plt.savefig("data/RNN_imitation/test_reward.png")
-
-    all_frames = np.array(all_frames).swapaxes(0, 1)
-    all_frames = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in all_frames])
-    save_numpy_as_gif(all_frames, "data/RNN_imitation/video/rnn_imitation.gif")
