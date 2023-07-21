@@ -496,39 +496,7 @@ def main(args):
     #     device=device
     # )
     agent = None
-    # utils.create_demonstration(env, video_dir, args.num_demonstrations)
-    img_size = 128
-    thresh = env.cloth_particle_radius + env.action_tool.picker_radius + env.action_tool.picker_threshold
-    all_play_frames_planner = []
-    count_play_planner = 0
-    for _ in range(40):
-        obs = env.reset()
-        play_data = []
-        play_frames = [env.get_image(img_size, img_size)]
-        while True:
-            if np.random.uniform(0.0, 1.0) <= 0.5:
-                obs, play_frames, play_data = utils.pick_and_drag_play(env, obs, play_frames, play_data, thresh, img_size=img_size)
-            else:
-                obs, play_frames, play_data = utils.pick_by_2_picker_and_drag(env, obs, play_frames, play_data, thresh, img_size=img_size)
-            if len(play_data) >= env.horizon + 1:
-                break
-        play_data = play_data[:env.horizon]
-        play_frames = play_frames[:env.horizon+1]
-        count_play_planner += 1
-        all_play_frames_planner.append(play_frames)
-        # play_data_path = os.path.join(play_npy, f'data_{count_play_planner}.npy')
-        # np.save(play_data_path, play_data)
-        # PLAY_NPY.append(os.path.abspath(play_data_path))
-        print('[INFO]Collected {} play data'.format(count_play_planner))
-
-    # play_df = pd.DataFrame({'NPY_Path': PLAY_NPY})
-    # play_df.to_csv(os.path.join(video_dir, 'play.csv'), index=False)
-    for i in range(100//20):
-        sub_all_frames_planner = all_play_frames_planner[i*20:(i+1)*20]
-        sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
-        sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=4, padding=3) for frame in sub_all_frames_planner])
-        save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'play_{}.gif'.format(i)))
-
+    utils.create_demonstration(env, video_dir, args.num_demonstrations)
     exit()
 
 

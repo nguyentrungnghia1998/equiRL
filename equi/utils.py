@@ -1344,6 +1344,7 @@ def create_demonstration(env,
     all_frames_planner = []
     all_expert_data_planner = []
     all_play_data_planner = []
+    all_play_frames_planner = []
     count_expert_planner = 0
     count_play_planner = 0
     Demo_Length = []
@@ -1469,27 +1470,27 @@ def create_demonstration(env,
         save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'expert_{}.gif'.format(i)))
     
     
-    # for _ in range(20):
-    #     obs = env.reset()
-    #     play_data = []
-    #     play_frames = [env.get_image(img_size, img_size)]
-    #     while True:
-    #         if np.random.uniform(0.0, 1.0) <= 0.5:
-    #             obs, play_frames, play_data = pick_and_drag_play(env, obs, play_frames, play_data, thresh, img_size=img_size)
-    #             obs, play_frames, play_data = pick_by_2_picker_and_drag(env, obs, play_frames, play_data, thresh, img_size=img_size)
-    #         else:
-    #             obs, play_frames, play_data = pick_by_2_picker_and_drag(env, obs, play_frames, play_data, thresh, img_size=img_size)
-    #             obs, play_frames, play_data = pick_and_drag_play(env, obs, play_frames, play_data, thresh, img_size=img_size)
-    #         if len(play_data) >= env.horizon:
-    #             break
-    #     play_data = play_data[:env.horizon]
-    #     play_frames = play_frames[:env.horizon+1]
-    #     all_play_data_planner.append(play_data)
-    #     count_play_planner += 1
-    #     play_data_path = os.path.join(play_npy, f'data_{count_play_planner}.npy')
-    #     np.save(play_data_path, play_data)
-    #     PLAY_NPY.append(os.path.abspath(play_data_path))
-    #     print('[INFO]Collected {} play data'.format(count_play_planner))
+    for _ in range(100):
+        obs = env.reset()
+        play_data = []
+        play_frames = [env.get_image(img_size, img_size)]
+        while True:
+            if np.random.uniform(0.0, 1.0) <= 0.5:
+                obs, play_frames, play_data = pick_and_drag_play(env, obs, play_frames, play_data, thresh, img_size=img_size)
+                obs, play_frames, play_data = pick_by_2_picker_and_drag(env, obs, play_frames, play_data, thresh, img_size=img_size)
+            else:
+                obs, play_frames, play_data = pick_by_2_picker_and_drag(env, obs, play_frames, play_data, thresh, img_size=img_size)
+                obs, play_frames, play_data = pick_and_drag_play(env, obs, play_frames, play_data, thresh, img_size=img_size)
+            if len(play_data) >= env.horizon + 1:
+                break
+        play_data = play_data[:env.horizon]
+        play_frames = play_frames[:env.horizon+1]
+        all_play_data_planner.append(play_data)
+        count_play_planner += 1
+        play_data_path = os.path.join(play_npy, f'data_{count_play_planner}.npy')
+        np.save(play_data_path, play_data)
+        PLAY_NPY.append(os.path.abspath(play_data_path))
+        print('[INFO]Collected {} play data'.format(count_play_planner))
 
     # play_df = pd.DataFrame({'NPY_Path': PLAY_NPY})
     # play_df.to_csv(os.path.join(video_dir, 'play.csv'), index=False)
