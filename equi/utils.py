@@ -18,7 +18,6 @@ from matplotlib import pyplot as plt
 from PIL import Image
 from scipy.spatial import ConvexHull
 from softgym.utils.visualization import save_numpy_as_gif, make_grid
-import torchvision.models as model_pretrain
 import cv2
 import pandas as pd
 
@@ -629,16 +628,6 @@ def center_crop_image(image, output_size):
 
 def choose_random_particle_from_boundary(env):
     picker_pos, particle_pos = env.action_tool._get_pos()
-    # try:
-    #     hull = ConvexHull(particle_pos[:, [0, 2]])
-    # except:
-    #     return None
-
-    # bound_id = set()
-    # for simplex in hull.simplices:
-    #     bound_id.add(simplex[0])
-    #     bound_id.add(simplex[1])
-
     # take the corner points
     corner_point_upper_left = env._get_key_point_idx()[0]
     corner_point_lower_left = env._get_key_point_idx()[1]
@@ -735,12 +724,11 @@ def choose_random_particle_from_boundary(env):
         return np.array([choosen_id[1], choosen_id[0]])
     return choosen_id
 
-def pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data, max_step=15, img_size=128):
+def pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data, max_step=20, img_size=128):
     count_pick_bound = 0
     while True:
         picker_pos, particle_pos = env.action_tool._get_pos()
         target_pos = particle_pos[choosen_id, :3]
-        # target_pos[:, 1] += 0.03
         dis = target_pos - picker_pos
         norm = np.linalg.norm(dis, axis=1)
         action = np.clip(dis, -0.08, 0.08) / 0.08
@@ -762,6 +750,7 @@ def pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step,
             return [episode_step, obs, picker_state]
 
 def fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data, final_step, img_size=128):
+    episode_step_offset = episode_step
     # first move the height 0.3, keep the distance between 2 particles
     curr_pos = env.action_tool._get_pos()[0]
     dist = abs(curr_pos[0, 0] - curr_pos[1, 0])
@@ -783,12 +772,11 @@ def fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, 
             return None
         if (norm < thresh).all():
             break
-    final_step.append(episode_step)
 
     # second, stretch the cloth
-    curr_pos, particle_pos = env.action_tool._get_pos()
     init_pos = env._get_flat_pos()
     init_dis = np.linalg.norm(init_pos[choosen_id[0], [0, 2]] - init_pos[choosen_id[1], [0, 2]])
+    curr_pos, particle_pos = env.action_tool._get_pos()
     curr_dis = np.linalg.norm(particle_pos[choosen_id[0], [0, 2]] - particle_pos[choosen_id[1], [0, 2]])
     denta = (init_dis-curr_dis) / 2
     if curr_pos[0, 0] > curr_pos[1, 0]:
@@ -821,11 +809,11 @@ def fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, 
             return None
         if (norm < thresh).all():
             break
-    final_step.append(episode_step)
+    final_step.append(episode_step-episode_step_offset)
 
     # third, lift until one particle on the ground
-    while True:
-        action = np.array([0.0, 0.25, 0.0, 1, 0.0, 0.25, 0.0, 1])
+    for _ in range(20):
+        action = np.array([0.0, 0.5, 0.0, 1, 0.0, 0.5, 0.0, 1])
         next_obs, reward, done, info = env.step(action)
         next_picker_state = get_picker_state(env)
         expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
@@ -837,7 +825,8 @@ def fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, 
             return None
         if (env.action_tool._get_pos()[1][:, 1] >= 2*env.cloth_particle_radius).all():
             break
-    for _ in range (6):
+
+    for _ in range (4):
         action = np.array([0.0, 0.0, 0.0, 1, 0.0, 0.0, 0.0, 1])
         next_obs, reward, done, info = env.step(action)
         next_picker_state = get_picker_state(env)
@@ -846,7 +835,7 @@ def fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, 
         episode_step += 1
         obs = next_obs
         picker_state = next_picker_state
-    final_step.append(episode_step)
+    final_step.append(episode_step-episode_step_offset)
     # last, fling the cloth towards
     current_pos = env.action_tool._get_pos()[0]
     fling_height = current_pos[0, 1]
@@ -878,7 +867,7 @@ def fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, 
         picker_pos = env.action_tool._get_pos()[0]
         dis = target_pos - picker_pos
         norm = np.linalg.norm(dis, axis=1)
-        action = np.clip(dis, -0.06, 0.06) / 0.08
+        action = np.clip(dis, -0.08, 0.08) / 0.08
         action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
         next_picker_state = get_picker_state(env)
@@ -896,13 +885,11 @@ def fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, 
     curr_pos = env.action_tool._get_pos()[0]
     target_pos = copy.deepcopy(curr_pos)
     target_pos[:, 2] -= 1.5
-    count_last = 0
-    while True:
-        count_last += 1
+    for _ in range(3):
         picker_pos = env.action_tool._get_pos()[0]
         dis = target_pos - picker_pos
         norm = np.linalg.norm(dis, axis=1)
-        action = np.clip(dis, -0.06, 0.06) / 0.08
+        action = np.clip(dis, -0.08, 0.08) / 0.08
         action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
         next_obs, reward, done, info = env.step(action)
         expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
@@ -912,11 +899,9 @@ def fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, 
         picker_state = next_picker_state
         if episode_step == env.horizon:
             return None
-        if (norm < thresh).all() or count_last >= 4:
-            break
 
     # set the grasp is False
-    action = np.array([0.0, 1.0, 0.0, 0, 0.0, 1.0, 0.0, 0])
+    action = np.array([-1.0, 1.0, 0.0, 0, 1.0, 1.0, 0.0, 0])
     next_obs, reward, done, info = env.step(action)
     next_picker_state = get_picker_state(env)
     expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
@@ -925,32 +910,10 @@ def fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, 
     obs = next_obs
     picker_state = next_picker_state
     if done:
-        final_step.append(episode_step)
+        final_step.append(episode_step-episode_step_offset)
         return 1
     if episode_step == env.horizon:
         return None
-    final_step.append(episode_step)
-    curr_pos = env.action_tool._get_pos()[0]
-    target_pos = np.array([[-0.3, 0.3, 0.0], [0.3, 0.3, 0.0]])
-    count_reset = 0
-    while True:
-        count_reset += 1
-        picker_pos = env.action_tool._get_pos()[0]
-        dis = target_pos - picker_pos
-        norm = np.linalg.norm(dis, axis=1)
-        action = np.clip(dis, -0.08, 0.08) / 0.08
-        action = np.concatenate([action, np.zeros((2, 1))], axis=1).reshape(-1)
-        next_obs, reward, done, info = env.step(action)
-        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
-        frames.append(env.get_image(img_size, img_size))
-        episode_step += 1
-        obs = next_obs
-        picker_state = next_picker_state
-        if episode_step == env.horizon or info['normalized_performance'] > 0.95:
-            return None
-        if (norm < thresh).all() or count_reset >= 3:
-            break
-    final_step.append(episode_step)
     return [episode_step, obs, picker_state]
 
 def pick_and_drag(env, thresh, img_size=128):
@@ -1076,10 +1039,14 @@ def pick_and_drag(env, thresh, img_size=128):
 
     picker_pos, particle_pos = env.action_tool._get_pos()
     target_pos = picker_pos
+    random_y = np.random.uniform(-0.6, 0.6)
+    random_z = np.random.uniform(0.2, 0.75)
     if left:
-        target_pos[0, :] = [-0.3, 0.3, 0.0]
+        random_x = np.random.uniform(-0.6, 0)
+        target_pos[0, :] = [random_x, random_z, random_y]
     else:
-        target_pos[1, :] = [0.3, 0.3, 0.0]
+        random_x = np.random.uniform(0, 0.6)
+        target_pos[1, :] = [random_x, random_z, random_y]
     while True:
         picker_pos, _ = env.action_tool._get_pos()
         dis = target_pos - picker_pos
@@ -1140,10 +1107,400 @@ def pick_and_drag(env, thresh, img_size=128):
         picker_state = next_picker_state
     return None
 
+def pick_and_drag_play(env, obs, frames, play_data, thresh, img_size=128):
+    picker_state = get_picker_state(env)
+    picker_pos, particle_pos = env.action_tool._get_pos()
+    random_id = np.random.randint(0, len(particle_pos))
+    target_pos = picker_pos
+    if particle_pos[random_id, 0] >= 0:
+        left = 0
+        target_pos[1, :] = particle_pos[random_id, :3]
+    else:
+        left = 1
+        target_pos[0, :] = particle_pos[random_id, :3]
+    
+    # move to the target position
+    count = 0
+    while True:
+        picker_pos, _ = env.action_tool._get_pos()
+        dis = target_pos - picker_pos
+        norm = np.linalg.norm(dis, axis=1)
+        action = np.clip(dis, -0.08, 0.08) / 0.08
+        action = np.concatenate([action, np.zeros((2, 1))], axis=1)
+        if (norm <= thresh).all() or count >= 10:
+            if left:
+                action[0, -1] = 1
+            else:
+                action[1, -1] = 1
+        action = action.reshape(-1)
+        next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
+        play_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
+        frames.append(env.get_image(img_size, img_size))
+        obs = next_obs
+        picker_state = next_picker_state
+        count += 1
+        if left and picker_state[0] == 1:
+            break
+        if not left and picker_state[1] == 1:
+            break
+    
+    # random a position (x, y) uniform in range [-0.6, 0.6]
+    picker_pos, particle_pos = env.action_tool._get_pos()
+    random_x = np.random.uniform(-0.6, 0.6)
+    random_y = np.random.uniform(-0.6, 0.6)
+    dxy = np.sqrt(random_x**2 + random_y**2)
+    random_z = np.random.uniform(0.1, min(1.1-dxy, 0.75))
+    target_pos = picker_pos
+    if left:
+        target_pos[0] = [random_x, random_z, random_y]
+    else:
+        target_pos[1] = [random_x, random_z, random_y]
 
+    # move to the target position
+    while True:
+        picker_pos, _ = env.action_tool._get_pos()
+        dis = target_pos - picker_pos
+        norm = np.linalg.norm(dis, axis=1)
+        action = np.clip(dis, -0.04, 0.04) / 0.08
+        action = np.concatenate([action, np.zeros((2, 1))], axis=1)
+        if left:
+            action[0, -1] = 1
+        else:
+            action[1, -1] = 1
+        action = action.reshape(-1)
+        next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
+        play_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
+        frames.append(env.get_image(img_size, img_size))
+        obs = next_obs
+        picker_state = next_picker_state
+        if (norm <= thresh).all():
+            break
+
+    action = np.array([0.0, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0])
+    next_obs, reward, done, info = env.step(action)
+    next_picker_state = get_picker_state(env)
+    play_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
+    frames.append(env.get_image(img_size, img_size))
+    obs = next_obs
+    picker_state = next_picker_state
+
+    obs, frames, play_data = random_picker_position(env, obs, frames, play_data, thresh, img_size)
+    # save_numpy_as_gif(np.array(frames), 'test.gif')
+    return obs, frames, play_data
+
+def random_picker_position(env, obs, frames, play_data, thresh, img_size=128):
+    picker_state = get_picker_state(env)
+    picker_pos, _ = env.action_tool._get_pos()
+    if np.random.uniform(0.0, 1.0) <= 0.5:
+        # random a position (x, y) uniform in range [-0.6, 0.6]
+        random_x_1 = np.random.uniform(-0.6, 0.6)
+        random_y_1 = np.random.uniform(-0.6, 0.6)
+        dxy = np.sqrt(random_x_1**2 + random_y_1**2)
+        random_z_1 = np.random.uniform(0.2, min(1.1-dxy, 0.75))
+
+        random_x_2 = np.random.uniform(-0.6, 0.6)
+        random_y_2 = np.random.uniform(-0.6, 0.6)
+        dxy = np.sqrt(random_x_2**2 + random_y_2**2)
+        random_z_2 = np.random.uniform(0.2, min(1.1-dxy, 0.75))
+
+        if random_x_1 > random_x_2:
+            random_x_1, random_x_2 = random_x_2, random_x_1
+        target_pos = np.array([[random_x_1, random_z_1, random_y_1], [random_x_2, random_z_2, random_y_2]])
+    else:
+        target_pos = np.array([[-0.3, 0.3, 0.0], [0.3, 0.3, 0.0]])
+    while True:
+        picker_pos, _ = env.action_tool._get_pos()
+        dis = target_pos - picker_pos
+        norm = np.linalg.norm(dis, axis=1)
+        action = np.clip(dis, -0.08, 0.08) / 0.08
+        action = np.concatenate([action, np.zeros((2, 1))], axis=1)
+        action = action.reshape(-1)
+        next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
+        play_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
+        frames.append(env.get_image(img_size, img_size))
+        obs = next_obs
+        picker_state = next_picker_state
+        if (norm <= thresh).all():
+            break
+    return obs, frames, play_data
+
+
+def pick_by_2_picker_and_drag(env, obs, frames, play_data, thresh, img_size=128):
+    picker_state = get_picker_state(env)
+    picker_pos, particle_pos = env.action_tool._get_pos()
+    random_id_1 = np.random.randint(0, len(particle_pos))
+    random_id_2 = np.random.randint(0, len(particle_pos))
+    while random_id_1 == random_id_2 or np.linalg.norm(particle_pos[random_id_1, :3] - particle_pos[random_id_2, :3]) <= 0.1:
+        random_id_2 = np.random.randint(0, len(particle_pos))
     
+    target_pos1 = particle_pos[random_id_1, :3]
+    target_pos2 = particle_pos[random_id_2, :3]
+    if target_pos1[0] >= target_pos2[0]:
+        target_pos = np.concatenate([target_pos2.reshape(1, -1), target_pos1.reshape(1, -1)], axis=0)
+    else:
+        target_pos = np.concatenate([target_pos1.reshape(1, -1), target_pos2.reshape(1, -1)], axis=0)
+    count = 0
+    while True:
+        picker_pos, _ = env.action_tool._get_pos()
+        dis = target_pos - picker_pos
+        norm = np.linalg.norm(dis, axis=1)
+        action = np.clip(dis, -0.08, 0.08) / 0.08
+        action = np.concatenate([action, np.zeros((2, 1))], axis=1)
+        if (norm <= thresh).all() or count >= 20:
+            action[:, -1] = 1
+        action = action.reshape(-1)
+        next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
+        play_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
+        frames.append(env.get_image(img_size, img_size))
+        obs = next_obs
+        picker_state = next_picker_state
+        count += 1
+        if (picker_state == 1).all() or count >= 20:
+            break
     
+    # initial position
+    init_pos = env._get_flat_pos()
+    init_dis = np.linalg.norm(init_pos[random_id_1, :3] - init_pos[random_id_2, :3])
+    # random a position (x, y) uniform in range [-0.6, 0.6]
+    picker_pos, particle_pos = env.action_tool._get_pos()
+    random_x1 = np.random.uniform(-0.6, 0.6)
+    random_y1 = np.random.uniform(-0.6, 0.6)
+    dxy = np.sqrt(random_x1**2 + random_y1**2)
+    random_z1 = np.random.uniform(0.2, min(1.1-dxy, 0.75))
+
+    denta = np.random.uniform(0.0, init_dis)
+    r = np.random.uniform(0.0, 1.0)
+    if r <= 0.33:
+        random_x2 = random_x1 + denta
+        random_y2 = random_y1
+        random_z2 = random_z1
+    elif r <= 0.66:
+        random_x2 = random_x1
+        random_y2 = random_y1 + denta
+        random_z2 = random_z1
+    else:
+        random_x2 = random_x1
+        random_y2 = random_y1
+        random_z2 = random_z1 + denta
+
+    if random_x1 > random_x2:
+        random_x1, random_x2 = random_x2, random_x1
+    target_pos = np.array([[random_x1, random_z1, random_y1], [random_x2, random_z2, random_y2]])
+    count = 0
+    while True:
+        picker_pos, _ = env.action_tool._get_pos()
+        dis = target_pos - picker_pos
+        norm = np.linalg.norm(dis, axis=1)
+        action = np.clip(dis, -0.04, 0.04) / 0.08
+        action = np.concatenate([action, np.ones((2, 1))], axis=1)
+        action = action.reshape(-1)
+        next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
+        play_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
+        frames.append(env.get_image(img_size, img_size))
+        obs = next_obs
+        picker_state = next_picker_state
+        count += 1
+        if (norm <= thresh).all() or count >= 20:
+            break
+
+    action = np.array([0.0, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0])
+    next_obs, reward, done, info = env.step(action)
+    next_picker_state = get_picker_state(env)
+    play_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
+    frames.append(env.get_image(img_size, img_size))
+    obs = next_obs
+    picker_state = next_picker_state
+
+    obs, frames, play_data = random_picker_position(env, obs, frames, play_data, thresh, img_size)
+    # save_numpy_as_gif(np.array(frames), 'test.gif')
+    return obs, frames, play_data
+
+
+def create_demonstration(env,
+                         video_dir,
+                         num_demonstrations,
+                         img_size=128,
+):
+    print(f'[INFO] =================================================================================================')
+    print(f'[INFO] ==================== START COLLECTING {num_demonstrations} DEMONSTRATIONS AND PLAY DATA ====================')
+    print(f'[INFO] {num_demonstrations//2} for pick and drag, {num_demonstrations//2} for fling')
+    print(f'[INFO] AND collecting 100 play data')
+    print(f'[INFO] =================================================================================================')
+    
+    # create directory to save demonstratio
+    demo_npy = os.path.join(video_dir, 'demo_npy')
+    if not os.path.exists(demo_npy):
+        os.makedirs(demo_npy, exist_ok=True)
+
+    play_npy = os.path.join(video_dir, 'play_npy')
+    if not os.path.exists(play_npy):
+        os.makedirs(play_npy, exist_ok=True)
+
+    all_frames_planner = []
+    all_expert_data_planner = []
+    all_play_data_planner = []
+    all_play_frames_planner = []
+    count_expert_planner = 0
+    count_play_planner = 0
+    Demo_Length = []
+    Demo_Final_Step = []
+    Demo_NPY = []
+    PLAY_NPY = []
+
+    thresh = env.cloth_particle_radius + env.action_tool.picker_radius + env.action_tool.picker_threshold
+    while True:
+        obs = env.reset()
+        play_data = []
+        play_frames = [env.get_image(img_size, img_size)]
+        if np.random.uniform(0.0, 1.0) <= 0.5:
+            # reinitialize the cloth and picker
+            obs, play_frames, play_data = pick_and_drag_play(env, obs, play_frames, play_data, thresh, img_size=img_size)
+        episode_step = len(play_data) if len(play_data) != 0 else 0
+        flag_reset = False
+        while True:
+            final_step = []
+            expert_data = []
+            frames = [env.get_image(img_size, img_size)]
+            picker_state = get_picker_state(env)
+            episode_step_offset = episode_step
+            # choose random boundary point
+            choosen_id = choose_random_particle_from_boundary(env)
+            if choosen_id is None:
+                print('[INFO] Cannot find boundary point!!!')
+                flag_reset = True
+                break
+            # move to two choosen boundary points and pick them
+            pick_choosen = pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data, img_size=img_size)
+            if pick_choosen is None:
+                flag_reset = True
+                break
+            else:
+                episode_step, obs, picker_state = pick_choosen[0], pick_choosen[1], pick_choosen[2]
+                final_step.append(episode_step-1-episode_step_offset)
+            # fling primitive
+            fling = fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data, final_step, img_size=img_size)
+            if fling == 1:
+                for i in range(len(final_step)):
+                    if i != 0:
+                        final_step[i] += final_step[0] + 1
+                assert final_step[-1] == len(frames) - 1
+                count_expert_planner += 1
+                break
+            if fling is None:
+                flag_reset = True
+                break
+            episode_step, obs, picker_state = fling[0], fling[1], fling[2]
+            # copy data in list frames and expert_data to play_frames and play_data
+            for i in range(len(expert_data)):
+                play_frames.append(frames[i+1])
+                play_data.append(expert_data[i])
+            # random picker position
+            pre = len(play_data)
+            obs, play_frames, play_data = random_picker_position(env, obs, play_frames, play_data, thresh, img_size=img_size)
+            pos = len(play_data)
+            episode_step += pos - pre
+        if flag_reset:
+            # copy data in list frames and expert_data to play_frames and play_data
+            if len(expert_data) + len(play_data) == env.horizon:
+                for i in range(len(expert_data)):
+                    play_frames.append(frames[i+1])
+                    play_data.append(expert_data[i])
+                all_play_data_planner.append(play_data)
+                count_play_planner += 1
+                play_data_path = os.path.join(play_npy, f'data_{count_play_planner}.npy')
+                np.save(play_data_path, play_data)
+                PLAY_NPY.append(os.path.abspath(play_data_path))
+            continue
         
+        Demo_Final_Step.append(final_step)
+        Demo_Length.append(len(frames))
+       
+        # save expert data type list to npy file
+        expert_data_path = os.path.join(demo_npy, f'data_{count_expert_planner}.npy')
+        np.save(expert_data_path, expert_data)
+        Demo_NPY.append(os.path.abspath(expert_data_path))
+
+        if len(frames) != env.horizon + 1:
+            for _ in range(env.horizon + 1 - len(frames)):
+                frames.append(env.get_image(img_size, img_size))
+ 
+        all_frames_planner.append(frames)
+        all_expert_data_planner.append(expert_data)
+        print('[INFO]Collected {} fling demonstrations in {} steps'.format(count_expert_planner, len(expert_data)))
+        if count_expert_planner == num_demonstrations//2:
+            print('==================== FINISH COLLECTING FLING DEMONSTRATIONS ====================')
+            break
+    
+    while True:
+        pick_and_drag_out = pick_and_drag(env, thresh, img_size=img_size)
+        if pick_and_drag_out is not None:
+            count_expert_planner += 1
+            final_step, frames, expert_data = pick_and_drag_out[1], pick_and_drag_out[2], pick_and_drag_out[3]
+            Demo_Final_Step.append(final_step)
+            Demo_Length.append(len(frames))
+
+            # save expert data type list to npy file
+            expert_data_path = os.path.join(demo_npy, f'data_{count_expert_planner}.npy')
+            np.save(expert_data_path, expert_data)
+            Demo_NPY.append(os.path.abspath(expert_data_path))
+
+            if len(frames) != env.horizon + 1:
+                for _ in range(env.horizon + 1 - len(frames)):
+                    frames.append(env.get_image(img_size, img_size))
+
+            all_frames_planner.append(frames)
+            all_expert_data_planner.append(expert_data)
+            print('[INFO]Collected {} pick and drag demonstrations in {} steps'.format(count_expert_planner-num_demonstrations//2, len(expert_data)))
+            if count_expert_planner == num_demonstrations:
+                print('==================== FINISH COLLECTING PICK AND DRAG DEMONSTRATIONS ====================')
+                break
+
+    df = pd.DataFrame({'Length': Demo_Length, 'Final_step': Demo_Final_Step, 'NPY_Path': Demo_NPY})
+    df.to_csv(os.path.join(video_dir, 'demo.csv'), index=False)
+
+    for i in range(num_demonstrations//20):
+        sub_all_frames_planner = all_frames_planner[i*20:(i+1)*20] 
+        sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
+        sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=4, padding=3) for frame in sub_all_frames_planner])
+        save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'expert_{}.gif'.format(i)))
+    
+    
+    for _ in range(100):
+        obs = env.reset()
+        play_data = []
+        play_frames = [env.get_image(img_size, img_size)]
+        while True:
+            if np.random.uniform(0.0, 1.0) <= 0.5:
+                obs, play_frames, play_data = pick_and_drag_play(env, obs, play_frames, play_data, thresh, img_size=img_size)
+                obs, play_frames, play_data = pick_by_2_picker_and_drag(env, obs, play_frames, play_data, thresh, img_size=img_size)
+            else:
+                obs, play_frames, play_data = pick_by_2_picker_and_drag(env, obs, play_frames, play_data, thresh, img_size=img_size)
+                obs, play_frames, play_data = pick_and_drag_play(env, obs, play_frames, play_data, thresh, img_size=img_size)
+            if len(play_data) >= env.horizon + 1:
+                break
+        play_data = play_data[:env.horizon]
+        play_frames = play_frames[:env.horizon+1]
+        all_play_data_planner.append(play_data)
+        count_play_planner += 1
+        play_data_path = os.path.join(play_npy, f'data_{count_play_planner}.npy')
+        np.save(play_data_path, play_data)
+        PLAY_NPY.append(os.path.abspath(play_data_path))
+        print('[INFO]Collected {} play data'.format(count_play_planner))
+
+    # play_df = pd.DataFrame({'NPY_Path': PLAY_NPY})
+    # play_df.to_csv(os.path.join(video_dir, 'play.csv'), index=False)
+    # for i in range(100//20):
+    #     sub_all_frames_planner = all_play_data_planner[i*20:(i+1)*20] 
+    #     sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
+    #     sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=4, padding=3) for frame in sub_all_frames_planner])
+    #     save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'play_{}.gif'.format(i)))
+    
+    return all_expert_data_planner, all_play_data_planner
 
 
 
@@ -1616,3 +1973,510 @@ def create_demonstration(env,
         sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=4, padding=3) for frame in sub_all_frames_planner])
         save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'expert_{}.gif'.format(i)))
     # exit()
+def predict_action(x, embs_concat, actions_concat, k=5):
+    # find k nearest neighbors in embs_concat
+    dists = np.linalg.norm(embs_concat - x, axis=-1)
+    nn_ids = np.argsort(dists)[:k]
+    nn_actions = actions_concat[nn_ids]
+    nn_dist = dists[nn_ids]
+    nn_dist = np.exp(-nn_dist)
+    nn_dist = nn_dist / np.sum(nn_dist)
+
+    for i in range(k):
+        if i == 0:
+            action = nn_dist[i] * nn_actions[i]
+        else:
+            action += nn_dist[i] * nn_actions[i]
+    action[3] = 0 if action[3] <= 0.5 else 1
+    action[7] = 0 if action[7] <= 0.5 else 1
+    return action
+
+class Identity(nn.Module):
+    '''
+    Author: Janne Spijkervet
+    url: https://github.com/Spijkervet/SimCLR
+    '''
+    def __init__(self):
+        super(Identity, self).__init__()
+
+    def forward(self, x):
+        return x
+
+def load_model_byol(model, id=50):
+    print(f'[INFO] Loading model with {id} ...')
+    ckpt = torch.load(f'/home/hnguyen/cloth_smoothing/tcc/byol_{id}.pt', map_location=torch.device('cpu'))
+    model.load_state_dict(ckpt)
+    # model.fc = Identity()
+    model.fc = nn.Identity()
+    print('[INFO] Loaded model ...')
+    return model
+
+class RNN_actor(nn.Module):
+    def __init__(self, input_shape = (1,128,128), device = "cpu"):
+        
+        super(RNN_actor, self).__init__()
+        
+        # Define the CNN
+        # self.length = input_shape[0]
+        self.channel = input_shape[0]
+        self.device = device
+        # self.length_video = length_video
+        self.cnn = nn.Sequential(
+            nn.Conv2d(in_channels=self.channel, out_channels=32, kernel_size=3, stride =1, padding=1),
+            nn.MaxPool2d(2),
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride =1, padding = 1),
+            nn.MaxPool2d(2),
+            nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride=1, padding = 1),
+            nn.MaxPool2d(2)
+        )
+        
+        self.fc1 = nn.Linear(128*16*16, 512)
+        self.rnn = nn.LSTM(512, 64, 1, batch_first=True)
+        self.fc2 = nn.Linear(64, 8)
+        
+    def forward(self, x):
+        # Process the input image with the CNN
+        length = x.shape[1]
+        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
+        x = self.cnn(x)
+        x = x.view(x.size(0), -1)
+        
+        # Process the CNN output with the LSTM
+        x = self.fc1(x)
+
+        x = x.view(-1,length,x.size(1))
+        
+        h0 = torch.randn(1, x.size(0), 64).to(self.device)
+        c0 = torch.randn(1, x.size(0), 64).to(self.device)
+
+        out, _ = self.rnn(x, (h0,c0))
+
+        out = self.fc2(out)
+        # Compute the output
+        return out
+
+class BC_RNN_actor(nn.Module):
+    def __init__(self, obs_shape = (1,128,128), device = "cpu"):
+        
+        super(BC_RNN_actor, self).__init__()
+        
+        # Define the CNN
+        # self.length = input_shape[0]
+        self.channel = obs_shape[0]
+        self.device = device
+        # self.picker_shape = picker_shape
+        # self.length_video = length_video
+        self.encoder = nn.Sequential(
+            nn.Conv2d(in_channels=self.channel, out_channels=32, kernel_size=3, stride =1, padding=1),
+            nn.MaxPool2d(2),
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride =1, padding = 1),
+            nn.MaxPool2d(2),
+            nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride=1, padding = 1),
+            nn.MaxPool2d(2),
+            nn.Conv2d(in_channels=128, out_channels=256, kernel_size = 3, stride =1, padding = 1),
+            nn.MaxPool2d(2)
+        )
+        
+        self.fc1 = nn.Linear(256*8*8, 512)
+        self.fc2 = nn.Linear(512,128)
+        self.fc3 = nn.Linear(128,32)
+        self.rnn = nn.LSTM(32, 200 , 2, batch_first=True)
+        self.per_step = nn.Linear(200, 8)
+        self.relu = nn.ReLU()
+    def forward(self, x, init_state = None):
+        # Process the input image with the CNN
+        length = x.shape[1]
+        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
+        x = self.encoder(x)
+        x = x.view(x.size(0), -1)
+        
+        # Process the CNN output with the LSTM
+        x = self.relu(self.fc1(x))
+
+        x = self.relu(self.fc2(x))
+
+        x = self.fc3(x)
+
+        x = x.view(-1,length,x.size(1))
+        
+        if init_state is None:
+            h0 = torch.zeros(2,x.size(0),200).to(self.device)
+            c0 = torch.zeros(2,x.size(0),200).to(self.device)
+            init_state = (h0,c0)
+        out, (hn,cn) = self.rnn(x, init_state)
+
+        out = out.contiguous().view(-1,200)
+
+        out = self.per_step(out)
+
+        out = out.view(-1, length, out.size(1))
+
+        out = torch.tanh(out)
+
+        # Compute the output
+        return out, hn, cn
+
+class ResNet50Gray(nn.Module):
+    def __init__(self):
+        super(ResNet50Gray, self).__init__()
+        # Load the pre-trained ResNet-50 model
+        resnet = model_pretrain.resnet50(pretrained=True)
+        # Modify the first convolutional layer to accept 1 input channel instead of 3
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        # Copy the weights from the original RGB channel to all 3 channels
+        self.conv1.weight.data[:, :3, :, :] = resnet.conv1.weight.data.clone()
+        self.conv1.weight.data[:, 3:, :, :] = self.conv1.weight.data[:, :1, :, :]
+        # Use the rest of the pre-trained ResNet-50 model
+        self.bn1 = resnet.bn1
+        self.relu = resnet.relu
+        self.maxpool = resnet.maxpool
+        self.layer1 = resnet.layer1
+        self.layer2 = resnet.layer2
+        self.layer3 = resnet.layer3
+        self.layer4 = resnet.layer4
+        self.avgpool = resnet.avgpool
+        self.fc = resnet.fc
+
+    def forward(self, x):
+        # Convert grayscale images to RGB format
+        x = x.repeat(1, 3, 1, 1)
+        # Use the modified first convolutional layer
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.fc(x)
+        return x
+
+class TanhWrappedDistribution(torch.distributions.Distribution):
+    """
+    Class that wraps another valid torch distribution, such that sampled values from the base distribution are
+    passed through a tanh layer. The corresponding (log) probabilities are also modified accordingly.
+    Tanh Normal distribution - adapted from rlkit and CQL codebase
+    (https://github.com/aviralkumar2907/CQL/blob/d67dbe9cf5d2b96e3b462b6146f249b3d6569796/d4rl/rlkit/torch/distributions.py#L6).
+    """
+    def __init__(self, base_dist, scale=1.0, epsilon=1e-6):
+        """
+        Args:
+            base_dist (Distribution): Distribution to wrap with tanh output
+            scale (float): Scale of output
+            epsilon (float): Numerical stability epsilon when computing log-prob.
+        """
+        self.base_dist = base_dist
+        self.scale = scale
+        self.tanh_epsilon = epsilon
+        super(TanhWrappedDistribution, self).__init__()
+
+    def log_prob(self, value, pre_tanh_value=None):
+        """
+        Args:
+            value (torch.Tensor): some tensor to compute log probabilities for
+            pre_tanh_value: If specified, will not calculate atanh manually from @value. More numerically stable
+        """
+        value = value / self.scale
+        if pre_tanh_value is None:
+            one_plus_x = (1. + value).clamp(min=self.tanh_epsilon)
+            one_minus_x = (1. - value).clamp(min=self.tanh_epsilon)
+            pre_tanh_value = 0.5 * torch.log(one_plus_x / one_minus_x)
+        lp = self.base_dist.log_prob(pre_tanh_value)
+        tanh_lp = torch.log(1 - value * value + self.tanh_epsilon)
+        # In case the base dist already sums up the log probs, make sure we do the same
+        return lp - tanh_lp if len(lp.shape) == len(tanh_lp.shape) else lp - tanh_lp.sum(-1)
+    def sample(self, sample_shape=torch.Size(), return_pretanh_value=False):
+        """
+        Gradients will and should *not* pass through this operation.
+        See https://github.com/pytorch/pytorch/issues/4620 for discussion.
+        """
+        z = self.base_dist.sample(sample_shape=sample_shape).detach()
+
+        if return_pretanh_value:
+            return torch.tanh(z) * self.scale, z
+        else:
+            return torch.tanh(z) * self.scale
+
+    def rsample(self, sample_shape=torch.Size(), return_pretanh_value=False):
+        """
+        Sampling in the reparameterization case - for differentiable samples.
+        """
+        z = self.base_dist.rsample(sample_shape=sample_shape)
+
+        if return_pretanh_value:
+            return torch.tanh(z) * self.scale, z
+        else:
+            return torch.tanh(z) * self.scale
+
+class BC_RNN_GMM_actor(nn.Module):
+    def __init__(self, obs_shape = (3,224,224), device = "cpu", hidden_size = 128, node = 5):
+        super(BC_RNN_GMM_actor, self).__init__()
+        self.channel = obs_shape[0]
+        self.device = device
+        self.node = node
+        self.hidden_size = hidden_size
+        self.encoder = model_pretrain.resnet50(pretrained = True)
+
+        self.encoder.load_state_dict(torch.load("data/RNN_imitation/model/byol.pt"))
+
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+
+        self.per_step_mean = nn.Linear(hidden_size, node*8)
+        self.per_step_std = nn.Linear(hidden_size, node*8)
+        self.per_step_logit = nn.Linear(hidden_size, node)
+
+        self.fc1 = nn.Linear(1100, 512)
+        self.fc2 = nn.Linear(512, 256)
+        self.rnn = nn.LSTM(256, hidden_size , 2, batch_first=True)
+
+        self.relu = nn.ReLU()
+    def forward(self, x, picker_state, init_state = None, train = True):
+        # Process the input image with the CNN
+        length = x.shape[1]
+        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
+        x = self.encoder(x)
+
+        x = x.view(-1,length,x.size(1))
+
+        x = torch.cat((x, picker_state), dim = 2)
+        
+        x = self.relu(self.fc1(x))
+        x = self.fc2(x)
+        if init_state is None:
+            h0 = torch.zeros(2,x.size(0),self.hidden_size).to(self.device)
+            c0 = torch.zeros(2,x.size(0),self.hidden_size).to(self.device)
+            init_state = (h0,c0)
+        out, (hn,cn) = self.rnn(x, init_state)
+
+        out = out.contiguous().view(-1,self.hidden_size)
+
+        mean = self.per_step_mean(out)
+
+        mean = mean.view(-1, length, self.node, 8)
+
+        std = self.per_step_std(out)
+        
+        std = std.view(-1, length, self.node, 8)
+
+        logits = self.per_step_logit(out)
+
+        logits = logits.view(-1, length, self.node)
+
+
+        if not train:
+            std = torch.ones_like(mean) * 1e-4
+        else:
+            std = torch.nn.functional.softplus(std) + 1e-4
+
+        component_distribution = torch.distributions.Normal(loc=mean, scale=std)
+        component_distribution = torch.distributions.Independent(component_distribution, 1)
+        mixture_distribution = torch.distributions.Categorical(logits=logits)
+
+        dists = torch.distributions.MixtureSameFamily(
+            mixture_distribution=mixture_distribution,
+            component_distribution=component_distribution,
+        )
+
+        dists = TanhWrappedDistribution(base_dist=dists, scale=1.)
+
+        return dists, hn, cn
+
+
+def create_demonstration(env,
+                         video_dir,
+                         num_demonstrations,
+                         img_size=128,
+):
+    print(f'[INFO] =================================================================================================')
+    print(f'[INFO] ==================== START COLLECTING {num_demonstrations} DEMONSTRATIONS ====================')
+    print(f'[INFO] {num_demonstrations//2} for pick and drag, {num_demonstrations//2} for fling')
+    print(f'[INFO] =================================================================================================')
+    
+    # create directory to save demonstration (Video RGB, Video Depth, Numpy)
+    demo_rgb = os.path.join(video_dir, 'demo_rgb')
+    demo_depth = os.path.join(video_dir, 'demo_depth')
+    demo_npy = os.path.join(video_dir, 'demo_npy')
+    if not os.path.exists(demo_rgb):
+        os.makedirs(demo_rgb, exist_ok=True)
+    if not os.path.exists(demo_depth):
+        os.makedirs(demo_depth, exist_ok=True)
+    if not os.path.exists(demo_npy):
+        os.makedirs(demo_npy, exist_ok=True)
+
+    all_frames_planner = []
+    all_expert_data_planner = []
+    count_planner = 0
+
+    Demo_RGB = []
+    Demo_Depth = []
+    Demo_Length = []
+    Demo_Final_Step = []
+    Demo_NPY = []
+
+    thresh = env.cloth_particle_radius + env.action_tool.picker_radius + env.action_tool.picker_threshold
+    while True:
+        obs = env.reset()
+        picker_state = get_picker_state(env)
+        episode_step = 0
+        frames = [env.get_image(img_size, img_size)]
+        expert_data = []
+        final_step = []
+        flag_reset = False
+        count = 0
+        while True:
+            count += 1
+            if count >= 3:
+                flag_reset = True
+                break
+            # choose random boundary point
+            choosen_id = choose_random_particle_from_boundary(env)
+            if choosen_id is None:
+                print('[INFO] Cannot find boundary point!!!')
+                flag_reset = True
+                break
+            # move to two choosen boundary points and pick them
+            pick_choosen = pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data, img_size=img_size)
+            if pick_choosen is None:
+                flag_reset = True
+                break
+            else:
+                episode_step, obs, picker_state = pick_choosen[0], pick_choosen[1], pick_choosen[2]
+            final_step.append(episode_step-1)
+            # fling primitive
+            fling = fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data, final_step, img_size=img_size)
+            if fling == 1 and count == 2:
+                count_planner += 1
+                break
+            if fling is None or (fling == 1 and count != 2):
+                flag_reset = True
+                break
+            episode_step, obs, picker_state = fling[0], fling[1], fling[2]
+      
+        if flag_reset:
+            continue
+        
+        Demo_Final_Step.append(final_step)
+        Demo_Length.append(len(frames))
+
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        rgb_path = os.path.join(demo_rgb, f'rgb_{count_planner}.mp4')
+        out_rgb = cv2.VideoWriter(rgb_path, fourcc, 30.0, (img_size, img_size))
+        for frame in frames:
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            out_rgb.write(frame)
+        out_rgb.release()
+        Demo_RGB.append(os.path.abspath(rgb_path))
+        
+        depth_path = os.path.join(demo_depth, f'depth_{count_planner}.mp4')
+        out_depth = cv2.VideoWriter(depth_path, fourcc, 30.0, (img_size, img_size), 0)
+        for frame in expert_data:
+            out_depth.write(frame[0][0, -1, ...].numpy())
+        out_depth.release()
+        Demo_Depth.append(os.path.abspath(depth_path))
+        
+        # save expert data type list to npy file
+        expert_data_path = os.path.join(demo_npy, f'data_{count_planner}.npy')
+        np.save(expert_data_path, expert_data)
+        Demo_NPY.append(os.path.abspath(expert_data_path))
+
+        if len(frames) != env.horizon + 1:
+            for _ in range(env.horizon + 1 - len(frames)):
+                frames.append(env.get_image(img_size, img_size))
+ 
+        all_frames_planner.append(frames)
+        all_expert_data_planner.append(expert_data)
+        print('[INFO]Collected {} fling demonstrations in {} steps'.format(count_planner, len(expert_data)))
+        if count_planner == num_demonstrations//2:
+            print('==================== FINISH COLLECTING FLING DEMONSTRATIONS ====================')
+            break
+    
+    while True                                                           :
+        pick_and_drag_out = pick_and_drag(env, thresh, img_size=img_size)
+        if pick_and_drag_out is not None:
+            count_planner += 1
+            final_step, frames, expert_data = pick_and_drag_out[1], pick_and_drag_out[2], pick_and_drag_out[3]
+            Demo_Final_Step.append(final_step)
+            Demo_Length.append(len(frames))
+
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            rgb_path = os.path.join(demo_rgb, f'rgb_{count_planner}.mp4')
+            out_rgb = cv2.VideoWriter(rgb_path, fourcc, 30.0, (img_size, img_size))
+            for frame in frames:
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                out_rgb.write(frame)
+            out_rgb.release()
+            Demo_RGB.append(os.path.abspath(rgb_path))
+
+            depth_path = os.path.join(demo_depth, f'depth_{count_planner}.mp4')
+            out_depth = cv2.VideoWriter(depth_path, fourcc, 30.0, (img_size, img_size), 0)
+            for frame in expert_data:
+                out_depth.write(frame[0][0, -1, ...].numpy())
+            out_depth.release()
+            Demo_Depth.append(os.path.abspath(depth_path))
+
+            # save expert data type list to npy file
+            expert_data_path = os.path.join(demo_npy, f'data_{count_planner}.npy')
+            np.save(expert_data_path, expert_data)
+            Demo_NPY.append(os.path.abspath(expert_data_path))
+
+            if len(frames) != env.horizon + 1:
+                for _ in range(env.horizon + 1 - len(frames)):
+                    frames.append(env.get_image(img_size, img_size))
+
+            all_frames_planner.append(frames)
+            all_expert_data_planner.append(expert_data)
+            print('[INFO]Collected {} pick and drag demonstrations in {} steps'.format(count_planner-num_demonstrations//2, len(expert_data)))
+            if count_planner == num_demonstrations:
+                print('==================== FINISH COLLECTING PICK AND DRAG DEMONSTRATIONS ====================')
+                break
+
+    df = pd.DataFrame({'RGB_Path': Demo_RGB, 'Depth_Path': Demo_Depth, 'Length': Demo_Length, 'Final_step': Demo_Final_Step, 'NPY_Path': Demo_NPY})
+    df.to_csv(os.path.join(video_dir, 'demo.csv'), index=False)
+
+    for i in range(num_demonstrations//20):
+        sub_all_frames_planner = all_frames_planner[i*20:(i+1)*20] 
+        sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
+        sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=4, padding=3) for frame in sub_all_frames_planner])
+        save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'expert_{}.gif'.format(i)))
+    # exit()
+def predict_action(x, embs_concat, actions_concat, k=5):
+    # find k nearest neighbors in embs_concat
+    dists = np.linalg.norm(embs_concat - x, axis=-1)
+    nn_ids = np.argsort(dists)[:k]
+    nn_actions = actions_concat[nn_ids]
+    nn_dist = dists[nn_ids]
+    nn_dist = np.exp(-nn_dist)
+    nn_dist = nn_dist / np.sum(nn_dist)
+
+    for i in range(k):
+        if i == 0:
+            action = nn_dist[i] * nn_actions[i]
+        else:
+            action += nn_dist[i] * nn_actions[i]
+    action[3] = 0 if action[3] <= 0.5 else 1
+    action[7] = 0 if action[7] <= 0.5 else 1
+    return action
+
+class Identity(nn.Module):
+    '''
+    Author: Janne Spijkervet
+    url: https://github.com/Spijkervet/SimCLR
+    '''
+    def __init__(self):
+        super(Identity, self).__init__()
+
+    def forward(self, x):
+        return x
+
+def load_model_byol(model, id=50):
+    print(f'[INFO] Loading model with {id} ...')
+    ckpt = torch.load(f'/home/hnguyen/cloth_smoothing/tcc/byol_{id}.pt', map_location=torch.device('cpu'))
+    model.load_state_dict(ckpt)
+    # model.fc = Identity()
+    model.fc = nn.Identity()
+    print('[INFO] Loaded model ...')
+    return model

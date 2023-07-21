@@ -231,10 +231,26 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
         prefix = 'stochastic_' if sample_stochastically else ''
         infos = []
         all_frames = []
+        # load file npy
+        embs_concat = np.load('/home/hnguyen/cloth_smoothing/tcc/embs_concat_250.npy')
+        action_concat = np.load('/home/hnguyen/cloth_smoothing/tcc/actions_concat_250.npy')
+        from torchvision import models
+        model = utils.load_model_byol(model=models.resnet50(pretrained=False), id=250)
+
         plt.figure()
         for i in range(num_episodes):
             obs = env.reset(eval_flag=True)
+            obs_0 = env.get_image(168, 168)
+            obs_0 = torch.FloatTensor(obs_0).permute(2, 0, 1).unsqueeze(0)
+            obs_0 = (obs_0 / 127.5) - 1.0
+            obss = [obs_0]
             picker_state = utils.get_picker_state(env)
+            first_row = picker_state[0]
+            second_row = picker_state[1]
+            new_array = np.empty((1, 100))
+            new_array[:, 0:50] = first_row
+            new_array[:, 50:] = second_row
+            picker_state = torch.FloatTensor(new_array)
             done = False
             episode_reward = 0
             ep_info = []
@@ -246,14 +262,36 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
                     if obs.shape[0] == 1:
                         obs = obs[0]
                     
+                    step_ = len(obss) - 1
+                    pre_step = step_ - 15
+                    pre_step = np.clip(pre_step, 0, step_)
+                    curr_obs = obss[step_]
+                    pre_obs = obss[pre_step]
+                    obs_ = torch.cat([pre_obs, curr_obs], dim=0)
+                    emb = model(obs_)
+                    a = emb[0::2]
+                    b = emb[1::2]
+                    emb_last = torch.cat([a, picker_state, b], dim=-1)
+                    emb_last = emb_last.detach().cpu().numpy()
+                    action = utils.predict_action(emb_last, embs_concat, action_concat)
+                    
                 # with utils.eval_mode(agent):
                 #     if sample_stochastically:
                 #         action = agent.sample_action(obs, picker_state)
                 #     else:
                 #         action = agent.select_action(obs, picker_state)
-                action = np.array([1, 0, 0, 0, -1, 0, 0, 0])
                 obs, reward, done, info = env.step(action)
                 picker_state = utils.get_picker_state(env)
+                first_row = picker_state[0]
+                second_row = picker_state[1]
+                new_array = np.empty((1, 100))
+                new_array[:, :50] = first_row
+                new_array[:, 50:] = second_row
+                picker_state = torch.FloatTensor(new_array)
+                obs_t = env.get_image(168, 168)
+                obs_t = torch.FloatTensor(obs_t).permute(2, 0, 1).unsqueeze(0)
+                obs_t = (obs_t) / 127.5 - 1.0
+                obss.append(obs_t)
                 episode_reward += reward
                 count += 1
                 ep_info.append(info)
@@ -277,12 +315,13 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
         plt.savefig(os.path.join(video_dir, '%d.png' % step))
         all_frames = np.array(all_frames).swapaxes(0, 1)
         all_frames = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in all_frames])
-        save_numpy_as_gif(all_frames, os.path.join(video_dir, '%d.gif' % step))
+        save_numpy_as_gif(all_frames, os.path.join(video_dir, '%d_250.gif' % step))
 
         for key, val in get_info_stats(infos).items():
             L.log('eval/info_' + prefix + key, val, step)
             if args.wandb:
                 wandb.log({key:val},step = step)
+            print(key, val)
         L.log('eval/' + prefix + 'eval_time', time.time() - start_time, step)
         mean_ep_reward = np.mean(all_ep_rewards)
         best_ep_reward = np.max(all_ep_rewards)
@@ -456,145 +495,33 @@ def main(args):
     #     args=args,
     #     device=device
     # )
-    thresh = env.cloth_particle_radius + env.action_tool.picker_radius + env.action_tool.picker_threshold
-    utils.pick_and_drag(env, thresh, img_size=224)
-    exit()
     agent = None
-    
-    print(f'[INFO] ==================== START COLLECTING {args.num_demonstrations} DEMONSTRATIONS ====================')
-    
-    demo_rgb = os.path.join(video_dir, 'demo_rgb')
-    demo_depth = os.path.join(video_dir, 'demo_depth')
-    demo_npy = os.path.join(video_dir, 'demo_npy')
+    utils.create_demonstration(env, video_dir, args.num_demonstrations)
+    exit()
 
-    if not os.path.exists(demo_rgb):
-        os.makedirs(demo_rgb, exist_ok=True)
 
-    if not os.path.exists(demo_depth):
-        os.makedirs(demo_depth, exist_ok=True)
-
-    if not os.path.exists(demo_npy):
-        os.makedirs(demo_npy, exist_ok=True)
-
-    all_frames_planner = []
-    all_expert_data_planner = []
-    count_planner = 0
-
-    Demo_RGB = []
-    Demo_Depth = []
-    Demo_Length = []
-    Demo_Final_Step = []
-    Demo_NPY = []
-
-    while True:
-        obs = env.reset()
-        picker_state = utils.get_picker_state(env)
-        episode_step = 0
-        frames = [env.get_image(128, 128)]
-        expert_data = []
-        final_step = []
-        flag_reset = False
-        count = 0
-        while True:
-            count += 1
-            if count >= 3:
-                flag_reset = True
-                break
-            # choose random boundary point
-            choosen_id = utils.choose_random_particle_from_boundary(env)
-            if choosen_id is None:
-                print('[INFO] Cannot find boundary point!!!')
-                flag_reset = True
-                break
-            # move to two choosen boundary points and pick them
-            pick_choosen = utils.pick_choosen_point(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data)
-            if pick_choosen is None:
-                flag_reset = True
-                break
-            else:
-                episode_step, obs, picker_state = pick_choosen[0], pick_choosen[1], pick_choosen[2]
-            final_step.append(episode_step-1)
-            # fling primitive
-            fling = utils.fling_primitive_1(env, obs, picker_state, choosen_id, thresh, episode_step, frames, expert_data, final_step)
-            if fling == 1 and count == 2:
-                count_planner += 1
-                break
-            if fling is None or (fling == 1 and count != 2):
-                flag_reset = True
-                break
-            episode_step, obs, picker_state = fling[0], fling[1], fling[2]
-      
-        if flag_reset:
-            continue
-        
-        Demo_Final_Step.append(final_step)
-        Demo_Length.append(len(frames))
-        # save rgb video (128x128x3) and depth video (128x128)
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        rgb_path = os.path.join(demo_rgb, f'rgb_{count_planner}.mp4')
-        out_rgb = cv2.VideoWriter(rgb_path, fourcc, 30.0, (args.image_size, args.image_size))
-        for frame in frames:
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            out_rgb.write(frame)
-        out_rgb.release()
-        Demo_RGB.append(os.path.abspath(rgb_path))
-        
-        depth_path = os.path.join(demo_depth, f'depth_{count_planner}.mp4')
-        out_depth = cv2.VideoWriter(depth_path, fourcc, 30.0, (args.image_size, args.image_size), 0)
-        for frame in expert_data:
-            out_depth.write(frame[0][0, -1, ...].numpy())
-        out_depth.release()
-        Demo_Depth.append(os.path.abspath(depth_path))
-        
-        # save expert data type list to npy file
-        expert_data_path = os.path.join(demo_npy, f'data_{count_planner}.npy')
-        np.save(expert_data_path, expert_data)
-        Demo_NPY.append(os.path.abspath(expert_data_path))
-
-        if len(frames) != env.horizon + 1:
-            for _ in range(env.horizon + 1 - len(frames)):
-                frames.append(env.get_image(args.image_size, args.image_size))
- 
-        all_frames_planner.append(frames)
-        all_expert_data_planner.append(expert_data)
-        print('[INFO]Collected {} demonstrations in {} steps'.format(count_planner, len(expert_data)))
-        if count_planner == args.num_demonstrations:
-            print('==================== FINISH COLLECTING DEMONSTRATIONS ====================')
-            break
-    
-    df = pd.DataFrame({'RGB_Path': Demo_RGB, 'Depth_Path': Demo_Depth, 'Length': Demo_Length, 'Final_step': Demo_Final_Step, 'NPY_Path': Demo_NPY})
-    df.to_csv(os.path.join(video_dir, 'demo.csv'), index=False)
-
-    for i in range(args.num_demonstrations//20):
-        sub_all_frames_planner = all_frames_planner[i*20:(i+1)*20] 
-        sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
-        sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=4, padding=3) for frame in sub_all_frames_planner])
-        save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'expert_{}.gif'.format(i)))
-    
-    for i in all_expert_data_planner:
-        r = []
-        for j in i:
+    # for i in all_expert_data_planner:
+        # r = []
+        # for j in i:
             # obs, action, reward, next_obs, done, picker_state, picker_next_state
             # add to replay buffer
-            r.append(j[2])
-            if args.prioritized_replay:
-                replay_buffer.add(j[0], j[5], j[1], j[2], j[3], j[6], j[4], 1.0)
-            else:
-                replay_buffer.add(j[0], j[5], j[1], j[2], j[3], j[6], j[4])
-        plt.plot(range(len(r)), r)
-    plt.xlabel('Timestep')
-    plt.ylabel('Reward')
-    plt.title('Reward over time')
-    plt.savefig(os.path.join(video_dir, 'reward.png'))
-    exit()
+            # r.append(j[2])
+            # if args.prioritized_replay:
+                # replay_buffer.add(j[0], j[5], j[1], j[2], j[3], j[6], j[4], 1.0)
+            # else:
+                # replay_buffer.add(j[0], j[5], j[1], j[2], j[3], j[6], j[4])
+        # plt.plot(range(len(r)), r)
+    # plt.xlabel('Timestep')
+    # plt.ylabel('Reward')
+    # plt.title('Reward over time')
+    # plt.savefig(os.path.join(video_dir, 'reward.png'))
         
-
 
     # for i in range(10000):
     #     print(f'Train {i} step')
     #     agent.update(replay_buffer, L, i, p_beta_schedule)
         
-    exit()
+    # exit()
 
     episode, episode_reward, done, ep_info = 0, 0, True, []
     start_time = time.time()
