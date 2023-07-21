@@ -63,7 +63,7 @@ env_arg_dict = {
                      'num_picker': 2,
                      'render': True,
                      'headless': True,
-                     'horizon': 200,
+                     'horizon': 150,
                      'action_repeat': 8,
                      'render_mode': 'cloth',
                      'num_variations': 1000,
