@@ -26,3 +26,26 @@ A_LOSS - average loss of actor
 CR_LOSS - average loss of critic
 CU_LOSS - average loss of the CURL encoder
 ```
+
+To train a BC RNN agent on the SoftGym tasks, run
+```
+python equi/run_imitation_using_rnn.py
+```
+Parameters:
+```
+--exp_name: name of the experiment
+--env_name: name of the environment
+--log_dir: directory to save the logs
+--test_episodes: number of episodes to test the agent
+--every_test: test the agent every 'every_test' episodes
+--num_train_steps: number of training steps
+--seed: random seed
+--batch_size: batch size
+--train_length: Length of input sequence to the LSTM
+--use_GMM: STORE TRUE if you want to use Gaussian Mixture Model
+--collect_demonstration: STORE TRUE if you want to collect demonstrations. Demonstrations will be stored in the folder 'data/RNN_imitation/video/demo.csv'
+--env_kwargs_num_variations: number of variations of the environment
+```
+
+Default parameters in file equi/run_imitation_using_rnn.py
+Other parameters can be found in file equi/default_config.py

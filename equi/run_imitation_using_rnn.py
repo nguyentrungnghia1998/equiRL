@@ -56,6 +56,8 @@ def main():
     parser.add_argument('--env_name', default='ClothFlatten')
     parser.add_argument('--log_dir', default='./data/RNN_imitation/')
     parser.add_argument('--test_episodes', default=10, type=int)
+    parser.add_argument('--every_test', default=200, type=int)
+    parser.add_argument('--num_train_steps', default=1000, type=int)
     parser.add_argument('--seed', default=100, type=int)
     parser.add_argument('--save_tb', default=False)  # Save stats to tensorbard
     parser.add_argument('--save_video', default=True)
@@ -67,7 +69,7 @@ def main():
     parser.add_argument('--replay_buffer_capacity', default=100000)
     parser.add_argument('--batch_size', default=8)
     parser.add_argument('--train_length', default = 30, type = int)
-    parser.add_argument("--use_GMM", default=True, action = 'store_true')
+    parser.add_argument("--use_GMM", default=False, action = 'store_true')
     parser.add_argument("--collect_demonstration", default=False, action = 'store_true')
 
     # Override environment arguments

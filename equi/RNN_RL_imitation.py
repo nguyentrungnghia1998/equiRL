@@ -621,8 +621,10 @@ def main(args):
 
     average_rewards = []
     all_epoch = []
+    if not os.path.exists("data/RNN_imitation/results/"):
+        os.mkdir("data/RNN_imitation/results/")
 
-    for epoch in range(3000):
+    for epoch in range(args.num_train_steps):
         print(f'Train {epoch} step')
         actor.train()
         running_loss = 0.0
@@ -642,14 +644,20 @@ def main(args):
             running_loss += loss.item()
         losses.append(running_loss/len(data_loader))
         print(f"Epoch {epoch} train loss: {running_loss/len(data_loader)}")
-        if epoch % 200 == 0:
+        if epoch % args.every_test == 0:
             test_phase(env, actor, args, device, epoch, average_rewards, all_epoch)
 
+    # Create a new figure, plot into it, then close it so it never gets displayed
+    plt.figure()
     plt.plot(steps,losses)
     plt.savefig("data/RNN_imitation/actor_loss.png")
     plt.show()
+    plt.close()
+
+    plt.figure()
     plt.plot(all_epoch, average_rewards)
     plt.savefig("data/RNN_imitation/average_rewards.png")
+    plt.show()
     plt.close()
 
 

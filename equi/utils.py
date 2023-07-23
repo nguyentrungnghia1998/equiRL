@@ -20,6 +20,7 @@ from scipy.spatial import ConvexHull
 from softgym.utils.visualization import save_numpy_as_gif, make_grid
 import cv2
 import pandas as pd
+import torchvision.models as model_pretrain
 
 
 
@@ -2219,8 +2220,8 @@ class BC_RNN_GMM_actor(nn.Module):
         self.node = node
         self.hidden_size = hidden_size
         self.encoder = model_pretrain.resnet50(pretrained = True)
-
-        self.encoder.load_state_dict(torch.load("data/RNN_imitation/model/byol.pt"))
+        if os.path.exists("data/RNN_imitation/model/byol.pt"):
+            self.encoder.load_state_dict(torch.load("data/RNN_imitation/model/byol.pt"))
 
         for param in self.encoder.parameters():
             param.requires_grad = False
