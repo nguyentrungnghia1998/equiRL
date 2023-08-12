@@ -101,7 +101,7 @@ class SoftGymEnv(object):
                 # done = True
                 # import ipdb; ipdb.set_trace()
 
-            if info['normalized_performance'] >= 0.99 and (ps is None for ps in self._env.action_tool.picked_particles):
+            if info['normalized_performance'] >= 1.0 and (ps is None for ps in self._env.action_tool.picked_particles):
                 done = True
             # if reward == 1.0:
                 # done = True

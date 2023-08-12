@@ -93,6 +93,7 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
             ep_info = []
             frames = [env.get_image(128, 128)]
             rewards = []
+            episode_step = 0
             while not done:
                 # center crop image
                 if args.encoder_type == 'pixel':
@@ -104,10 +105,13 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
                         action = agent.select_action(obs,picker_state)
                 # action = np.array([1.0, 0.0, 0.0, 0.15, -1.0, 0.0, 0.0, 0.01])
                 obs, reward, done, info = env.step(action)
+                episode_step += 1
                 episode_reward += reward
                 ep_info.append(info)
                 frames.append(env.get_image(128, 128))
                 rewards.append(reward)
+                if episode_step == env.horizon:
+                    done = True
             plt.plot(range(len(rewards)), rewards)
             if len(all_frames) < 8:
                 all_frames.append(frames)

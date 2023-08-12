@@ -227,8 +227,8 @@ class FlexEnv(gym.Env):
             width, height = self.camera_params['default_camera']['width'], self.camera_params['default_camera']['height']
             img = img.reshape(height, width, 4)[::-1, :, :3]  # Need to reverse the height dimension
             depth = depth.reshape(height, width)[::-1]
-            depth[depth>5] = 0
-            depth = (depth - 0.3) / 0.8
+            assert np.max(depth) <= 1.1 and np.min(depth) >= 0.3, 'Depth value out of range: {}-{}'.format(np.min(depth), np.max(depth))
+            depth = (depth - 0.3) / (1.1 - 0.3)
             return img, depth
         elif mode == 'human':
             raise NotImplementedError

@@ -19,9 +19,12 @@ from envs.env import Env
 from softgym.utils.visualization import save_numpy_as_gif, make_grid
 import matplotlib.pyplot as plt
 
-from scipy.spatial import ConvexHull
 import wandb
 import gc
+from equi.representation_learning import load_model, MLP_BC, RNN_MIMO_MLP
+from torchvision.models import resnet18
+import torch.nn as nn
+
 
 def test_equi(message, obs, picker_state, action, agent):
     act = agent.actor.act
@@ -223,87 +226,101 @@ def get_info_stats(infos):
     return stat_dict
 
 
-def evaluate(env, agent, video_dir, num_episodes, L, step, args):
+def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
     all_ep_rewards = []
 
     def run_eval_loop(sample_stochastically=True):
+        # bc_model = MLP_BC(input_dim=514, output_dim=8, hidden_dim=256)
+        # bc_model = load_model(bc_model, path='/home/hnguyen/cloth_smoothing/equiRL/bc_model.pt', representation=False).to(device)
+        
+        bc_rnn_model = RNN_MIMO_MLP(rnn_input_dim=514, rnn_hidden_dim=1024, rnn_num_layers=2, rnn_type="LSTM", rnn_is_bidirectional=False)
+        bc_rnn_model = load_model(bc_rnn_model, path='/home/hnguyen/cloth_smoothing/equiRL/bc_rnn_model_0_repr.pt', representation=False).to(device)
+
+        repr_model = resnet18(pretrained=False)
+        repr_model.conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        repr_model.fc = nn.Identity()
+        repr_model = load_model(repr_model, path='/home/hnguyen/cloth_smoothing/equiRL/learned_0_repr.pt', representation=False).to(device)
+
+        # repr_save = torch.load('/home/hnguyen/cloth_smoothing/equiRL/reprs.pt')
+        # action_save = torch.load('/home/hnguyen/cloth_smoothing/equiRL/actions.pt')
+
         start_time = time.time()
         prefix = 'stochastic_' if sample_stochastically else ''
         infos = []
         all_frames = []
-        # load file npy
-        embs_concat = np.load('/home/hnguyen/cloth_smoothing/tcc/embs_concat_250.npy')
-        action_concat = np.load('/home/hnguyen/cloth_smoothing/tcc/actions_concat_250.npy')
-        from torchvision import models
-        model = utils.load_model_byol(model=models.resnet50(pretrained=False), id=250)
-
         plt.figure()
         for i in range(num_episodes):
             obs = env.reset(eval_flag=True)
-            obs_0 = env.get_image(168, 168)
-            obs_0 = torch.FloatTensor(obs_0).permute(2, 0, 1).unsqueeze(0)
-            obs_0 = (obs_0 / 127.5) - 1.0
-            obss = [obs_0]
             picker_state = utils.get_picker_state(env)
-            first_row = picker_state[0]
-            second_row = picker_state[1]
-            new_array = np.empty((1, 100))
-            new_array[:, 0:50] = first_row
-            new_array[:, 50:] = second_row
-            picker_state = torch.FloatTensor(new_array)
             done = False
             episode_reward = 0
             ep_info = []
             frames = [env.get_image(128, 128)]
             rewards = []
-            count = 0
+            episode_step = 0
+            expert_data = []
+            final_step = []
+            # for _ in range(3):
+            #     fling = utils.fling_demonstrations(env,
+            #                                            obs,
+            #                                            picker_state,
+            #                                            episode_step,
+            #                                            frames,
+            #                                            expert_data,
+            #                                            ep_info,
+            #                                            final_step,
+            #                                            img_size=128)
+            #     if fling is None or fling == 1 or _ == 2:
+            #         fill = utils.fill_episode_with_all_zeros_action(env,
+            #                                                         obs,
+            #                                                         picker_state,
+            #                                                         episode_step,
+            #                                                         frames,
+            #                                                         expert_data,
+            #                                                         ep_info,
+            #                                                         final_step,
+            #                                                         img_size=128)
+            #         break
+            #     else:
+            #         episode_step = fling[0]
+            #         obs = fling[1]
+            #         picker_state = fling[2]
+            
+            rnn_state = bc_rnn_model.get_rnn_init_state(batch_size=1, device=device)            
             while not done:
+                # center crop image
                 if args.encoder_type == 'pixel':
-                    if obs.shape[0] == 1:
-                        obs = obs[0]
-                    
-                    step_ = len(obss) - 1
-                    pre_step = step_ - 15
-                    pre_step = np.clip(pre_step, 0, step_)
-                    curr_obs = obss[step_]
-                    pre_obs = obss[pre_step]
-                    obs_ = torch.cat([pre_obs, curr_obs], dim=0)
-                    emb = model(obs_)
-                    a = emb[0::2]
-                    b = emb[1::2]
-                    emb_last = torch.cat([a, picker_state, b], dim=-1)
-                    emb_last = emb_last.detach().cpu().numpy()
-                    action = utils.predict_action(emb_last, embs_concat, action_concat)
-                    
+                    obs = utils.center_crop_image(obs, args.image_size)
                 # with utils.eval_mode(agent):
                 #     if sample_stochastically:
-                #         action = agent.sample_action(obs, picker_state)
+                #         action = agent.sample_action(obs,picker_state)
                 #     else:
-                #         action = agent.select_action(obs, picker_state)
+                #         action = agent.select_action(obs,picker_state)
+                # import ipdb; ipdb.set_trace()
+                obs = obs.to(dtype=torch.float32, device=device) / 255.0
+                repr = repr_model(obs.unsqueeze(0))
+                picker_state = torch.tensor(picker_state).unsqueeze(0).to(device)
+                repr_cat = torch.cat([repr, picker_state], dim=1)
+
+                action, rnn_state = bc_rnn_model.forward_step(repr_cat, rnn_state)
+                action = action.cpu().detach().numpy()
+
+                # action = bc_model(repr_cat)
+                # action = action.squeeze(0).cpu().detach().numpy()
+                # action = utils.predict_action(repr_cat, repr_save, action_save, k=5)
                 obs, reward, done, info = env.step(action)
-                picker_state = utils.get_picker_state(env)
-                first_row = picker_state[0]
-                second_row = picker_state[1]
-                new_array = np.empty((1, 100))
-                new_array[:, :50] = first_row
-                new_array[:, 50:] = second_row
-                picker_state = torch.FloatTensor(new_array)
-                obs_t = env.get_image(168, 168)
-                obs_t = torch.FloatTensor(obs_t).permute(2, 0, 1).unsqueeze(0)
-                obs_t = (obs_t) / 127.5 - 1.0
-                obss.append(obs_t)
+                episode_step += 1
                 episode_reward += reward
-                count += 1
                 ep_info.append(info)
                 frames.append(env.get_image(128, 128))
                 rewards.append(reward)
-                if done:
-                    for i in range(env.horizon + 1 - count):
-                        frames.append(env.get_image(128, 128))
-                if count == env.horizon:
+                picker_state = utils.get_picker_state(env)
+                if episode_step == env.horizon:
                     done = True
+                    print(ep_info)
             plt.plot(range(len(rewards)), rewards)
-            if len(all_frames) < 8:
+            if len(all_frames) < 10:
+                print(len(frames))
                 all_frames.append(frames)
             infos.append(ep_info)
 
@@ -313,20 +330,22 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args):
         plt.ylabel('Reward')
         plt.title('Reward over time')
         plt.savefig(os.path.join(video_dir, '%d.png' % step))
+        plt.close()        
         all_frames = np.array(all_frames).swapaxes(0, 1)
         all_frames = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in all_frames])
-        save_numpy_as_gif(all_frames, os.path.join(video_dir, '%d_250.gif' % step))
+        save_numpy_as_gif(all_frames, os.path.join(video_dir, '%d.gif' % step))
 
         for key, val in get_info_stats(infos).items():
             L.log('eval/info_' + prefix + key, val, step)
+            print(key, val)
             if args.wandb:
                 wandb.log({key:val},step = step)
-            print(key, val)
-        L.log('eval/' + prefix + 'eval_time', time.time() - start_time, step)
-        mean_ep_reward = np.mean(all_ep_rewards)
-        best_ep_reward = np.max(all_ep_rewards)
-        L.log('eval/' + prefix + 'mean_episode_reward', mean_ep_reward, step)
-        L.log('eval/' + prefix + 'best_episode_reward', best_ep_reward, step)
+
+        # L.log('eval/' + prefix + 'eval_time', time.time() - start_time, step)
+        # mean_ep_reward = np.mean(all_ep_rewards)
+        # best_ep_reward = np.max(all_ep_rewards)
+        # L.log('eval/' + prefix + 'mean_episode_reward', mean_ep_reward, step)
+        # L.log('eval/' + prefix + 'best_episode_reward', best_ep_reward, step)
 
     run_eval_loop(sample_stochastically=False)
     L.dump(step)
@@ -496,7 +515,8 @@ def main(args):
     #     device=device
     # )
     agent = None
-    utils.create_demonstration(env, video_dir, args.num_demonstrations)
+
+    utils.create_demonstration(env, video_dir, args.num_demonstrations, img_size=128)
     exit()
 
 
@@ -531,7 +551,7 @@ def main(args):
         # evaluate agent periodically
         if step % args.eval_freq == 0:
             L.log('eval/episode', episode, step)
-            evaluate(env, agent, video_dir, args.num_eval_episodes, L, step, args)
+            evaluate(env, agent, video_dir, args.num_eval_episodes, L, step, args, device)
             if args.save_model and (step % (args.eval_freq * 5) == 0):
                 agent.save(model_dir, step)
             if args.save_buffer:
@@ -586,13 +606,3 @@ def main(args):
         episode_step += 1
         if episode_step == env.horizon:
             done = True
-
-        # while True:
-            # obs, picker_state, action, reward, next_obs, next_picker_state, done, _, _, _ = replay_buffer.sample(0.4)
-            # import ipdb; ipdb.set_trace()
-            # obs = obs[0].unsqueeze(0)
-            # picker_state = picker_state[0].unsqueeze(0)
-            # action = action[0].unsqueeze(0)
-# 
-            # test_equi(message='Test equivariant actor 1', obs=obs, picker_state=picker_state, action=action, agent=agent)
-            # test_equi(message='Test equivariant critic 1', obs=obs, picker_state=picker_state, action=action, agent=agent)

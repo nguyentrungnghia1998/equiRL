@@ -2,8 +2,8 @@ DEFAULT_CONFIG = {
     # environment
     'domain_name': 'cartpole',
     'task_name': 'swingup',
-    'pre_transform_image_size': 128,
-    'image_size': 128,
+    'pre_transform_image_size': 168,
+    'image_size': 168,
     'action_repeat': 1,
     # replay buffer
     'replay_buffer_capacity': 100000,
@@ -42,7 +42,7 @@ DEFAULT_CONFIG = {
     'alpha_beta': 0.5,
     'alpha_fixed': False,
     # misc
-    'seed': 1,
+    'seed': 0,
     'save_tb': False,
     'save_buffer': False,
     'save_video': False,
@@ -59,7 +59,7 @@ DEFAULT_CONFIG = {
     'wandb': False,
     'wandb_seed': 15,
     # expert
-    'num_demonstrations': 40,
+    'num_demonstrations': 1000,
     # prioritized replay
     'prioritized_replay': False,
     'prioritized_replay_alpha': 0.6,
