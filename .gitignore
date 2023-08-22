@@ -1,5 +1,6 @@
 data/*
 wandb/*
+model/*
 .vscode
 softgym/softgym/cached_initial_states/*
 **/__pycache__/

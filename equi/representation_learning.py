@@ -4,23 +4,23 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from torchvision.models import resnet18
-from torchvision import transforms
 from torch.utils.data import DataLoader, Dataset
+from torch.cuda.amp import autocast, GradScaler
 from byol import BYOL
 from tqdm import tqdm
+from behavior_transformer import BehaviorTransformer, GPT, GPTConfig
 
-class MLP_BC(nn.Module):
+class MLP(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim=256, last_activation='tanh'):
-        super(MLP_BC, self).__init__()
+        super(MLP, self).__init__()
+        self.output_dim = output_dim
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.fc3 = nn.Linear(hidden_dim, output_dim)
         self.dropout = nn.Dropout(0.1)
         self.relu = nn.ReLU()
-        if last_activation == 'tanh':
-            self.last = nn.Tanh()
-        elif last_activation == 'sigmoid':
-            self.last = nn.Sigmoid()
+        self.tanh = nn.Tanh()
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
         x = self.fc1(x)
@@ -29,7 +29,7 @@ class MLP_BC(nn.Module):
         x = self.relu(x)
         x = self.dropout(x)
         x = self.fc3(x)
-        x = self.last(x)
+        x = self.tanh(x)
         return x
     
 class Dynamical_Model(nn.Module):
@@ -65,101 +65,189 @@ class RNN_MIMO_MLP(nn.Module):
     """
     def __init__(
             self,
+            output_dim,
+            hidden_dim,
             rnn_input_dim,
             rnn_hidden_dim,
             rnn_num_layers,
             rnn_type="LSTM", # [LSTM, GRU]
-            rnn_is_bidirectional=False
+            use_pretrained_0_train=False,
+            path_pretrained=None
             ):
         """
+        output_dim (int): output dimension
+        hidden_dim (int): hidden dimension of the MLP
         rnn_input_dim (int): RNN input dimension
         rnn_hidden_dim (int): RNN hidden dimension
         rnn_num_layers (int): number of RNN layers
         rnn_type (str): [LSTM, GRU]
-        rnn_is_bidirectional: whether using bidirectional
+        use_pretrained_0_train: whether to use pretrained model for 0 training
+        path_pretrained: path to pretrained model
         """
-        # super(RNN_MIMO_MLP).__init__()
         super(RNN_MIMO_MLP, self).__init__()
-        self.rnn_is_bidirectional = rnn_is_bidirectional
+        assert path_pretrained is not None, "Path to pretrained model is None"
+        self.use_pretrained_0_train = use_pretrained_0_train
+        self.model = resnet18(pretrained=False)
+        self.model.conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        # self.model.load_state_dict(torch.load(path_pretrained, map_location=torch.device('cpu')))
+        self.model.fc = nn.Identity()
+        if self.use_pretrained_0_train:
+            for param in self.model.parameters():
+                param.requires_grad = False
         self.rnn_type = rnn_type
         self.rnn_hidden_dim = rnn_hidden_dim
-        self.num_directions = 2 if rnn_is_bidirectional else 1
         self.rnn_num_layers = rnn_num_layers
-        rnn_output_dim = self.num_directions * rnn_hidden_dim
-
-        self.mlp = MLP_BC(
-            input_dim=rnn_output_dim,
-            hidden_dim=256,
-            output_dim=8
-        )
-
         rnn_cls = nn.LSTM if rnn_type == "LSTM" else nn.GRU
         self.rnn = rnn_cls(
             input_size=rnn_input_dim,
             hidden_size=rnn_hidden_dim,
             num_layers=rnn_num_layers,
             batch_first=True,
-            bidirectional=rnn_is_bidirectional
         )
-
-    def get_rnn_init_state(self, batch_size, device):
-        """
-        Get initial state for RNN
-        """
-        h0 = torch.zeros(self.rnn_num_layers * self.num_directions , batch_size, self.rnn_hidden_dim).to(device)
-        if self.rnn_type == "LSTM":
-            c0 = torch.zeros(self.rnn_num_layers * self.num_directions, batch_size, self.rnn_hidden_dim).to(device)
-            return h0, c0
-        else:
-            return h0
+        self.mlp = MLP(input_dim=rnn_hidden_dim, output_dim=output_dim, hidden_dim=hidden_dim)
         
-    def forward(self, inputs, rnn_init_state=None, return_state=False):
+    def forward(self, obs, picker_state, rnn_hidden_state=None):
         """
-        inputs: [B, T, D]
-        rrn_init_state: initialize to zero if set to None
-        return_state: whether to return the hidden state
-
+        Training:
+            obs: [B, T, C, H, W]
+            picker_state: [B, T, 2]
+        Eavaluation:
+            obs: [B, C, H, W]
+            picker_state: [B, 2]
         Retuns:
             outputs: outputs of the per step net
             rnn_state: return rnn state if return_state is True
         """
-        assert inputs.dim() == 3, "Input dimension should be 3"
-        batch_size, seq_len, _ = inputs.size()
-        if rnn_init_state is None:
-            rnn_init_state = self.get_rnn_init_state(batch_size, inputs.device)
-        outputs, rnn_state = self.rnn(inputs, rnn_init_state)
-        outputs = self.mlp(outputs)
-        if return_state:
-            return outputs, rnn_state
-        else:
+        if obs.ndim == 5 and picker_state.ndim == 3:
+            # Training mode
+            batch, length, channel, height, width = obs.size()
+            if self.use_pretrained_0_train:
+                with torch.no_grad():
+                    inputs = self.model(obs.view(-1, channel, height, width))
+            else:
+                inputs = self.model(obs.view(-1, channel, height, width))
+            inputs = inputs.view(batch, length, -1)
+            inputs = torch.cat((inputs, picker_state), dim=-1)
+            assert inputs.dim() == 3, "Input dimension should be 3"
+            outputs, _ = self.rnn(inputs)
+            outputs = self.mlp(outputs)
             return outputs
+        elif obs.ndim == 4 and picker_state.ndim == 2:
+            assert rnn_hidden_state is not None, "RNN hidden state is None"
+            # Evaluation mode
+            obs = obs.unsqueeze(1)
+            picker_state = picker_state.unsqueeze(1)
+            batch, _, channel, height, width = obs.size()
+            with torch.no_grad():
+                inputs = self.model(obs.view(-1, channel, height, width))
+                inputs = inputs.view(batch, 1, -1)
+                inputs = torch.cat((inputs, picker_state), dim=-1)
+                assert inputs.dim() == 3, "Input dimension should be 3"
+                try:
+                    outputs, rnn_hidden_state = self.rnn(inputs, rnn_hidden_state)
+                except:
+                    outputs, rnn_hidden_state = self.rnn(inputs, (rnn_hidden_state[0].to(obs.device), rnn_hidden_state[1].to(obs.device)))
+                outputs = self.mlp(outputs)
+                return outputs, rnn_hidden_state
+        else:
+            raise ValueError("Input dimension is not correct")
+        
+    def reset(self):
+        # Initialize the hidden state
+        return (torch.zeros(self.rnn_num_layers, 1, self.rnn_hidden_dim),
+                torch.zeros(self.rnn_num_layers, 1, self.rnn_hidden_dim))
 
-    def forward_step(self, inputs, rnn_state):
-        """
-        inputs: [B, D]
-        rnn_state: previous rnn state
+class BC_model(nn.Module):
+    def __init__(self, input_dim, output_dim, hidden_dim=256, use_pretrained_0_train=False, path_pretrained=None):
+        super(BC_model, self).__init__()
+        assert path_pretrained is not None, "Path to pretrained model is None"
+        self.use_pretrained_0_train = use_pretrained_0_train
+        self.model = resnet18(pretrained=False)
+        self.model.conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        # self.model.load_state_dict(torch.load(path_pretrained, map_location=torch.device('cpu')))
+        self.model.fc = nn.Identity()
+        if self.use_pretrained_0_train:
+            for param in self.model.parameters():
+                param.requires_grad = False
+        self.mlp = MLP(input_dim=input_dim, output_dim=output_dim, hidden_dim=hidden_dim)
 
-        Retuns:
-            outputs: outputs of the per step net
-            rnn_state: return rnn state if return_state is True
-        """
-        assert inputs.dim() == 2, "Input dimension should be 2"
-        outputs, rnn_state = self.forward(inputs.unsqueeze(1), rnn_state, True)
-        return outputs[:, 0], rnn_state
+    def forward(self, obs, picker_state):
+        if self.use_pretrained_0_train:
+            with torch.no_grad():
+                repr = self.model(obs)
+        else:
+            repr = self.model(obs)
+        repr = torch.cat((repr, picker_state), dim=1)
+        out = self.mlp(repr)
+        return out
 
-def load_model(model, path='/home/hnguyen/cloth_smoothing/equiRL/learn_repr.pt', representation=True):
+class BeT_model(nn.Module):
+    def __init__(self,
+                 input_dim,
+                 act_dim,
+                 n_clusters=64,
+                 k_means_fit_steps=1000,
+                 gpt_block_size=200,
+                 gpt_n_layer=6,
+                 gpt_n_head=4,
+                 gpt_n_embd=256,
+                 use_pretrained_0_train=False,
+                 path_pretrained=None):
+        super(BeT_model, self).__init__()
+        assert path_pretrained is not None, "Path to pretrained model is None"
+        self.use_pretrained_0_train = use_pretrained_0_train
+        self.model = resnet18(pretrained=False)
+        self.model.conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        # self.model.load_state_dict(torch.load(path_pretrained, map_location=torch.device('cpu')))
+        self.model.fc = nn.Identity()
+        if use_pretrained_0_train:
+            for param in self.model.parameters():
+                param.requires_grad = False
+
+        self.gpt = GPT(GPTConfig(block_size=gpt_block_size,
+                                 input_dim=input_dim,
+                                 n_layer=gpt_n_layer,
+                                 n_head=gpt_n_head,
+                                 n_embd=gpt_n_embd))
+        
+        self.cbet = BehaviorTransformer(obs_dim=input_dim,
+                                        act_dim=act_dim,
+                                        goal_dim=0,
+                                        gpt_model=self.gpt,
+                                        n_clusters=n_clusters,
+                                        kmeans_fit_steps=k_means_fit_steps)
+
+    def forward(self, obs, picker_state, action=None):
+        batch, length, channel, height, width = obs.size()
+        if self.use_pretrained_0_train:
+            with torch.no_grad():
+                inputs = self.model(obs.view(-1, channel, height, width))
+        else:
+            inputs = self.model(obs.view(-1, channel, height, width))
+        inputs = inputs.view(batch, length, -1)
+        inputs = torch.cat((inputs, picker_state), dim=2)
+        assert inputs.dim() == 3, "Input dimension should be 3"
+        goals = torch.zeros(batch, length, 0).to(obs.device)
+        if action is None:
+            out = self.cbet(inputs, goals, action)[0]
+            print(out[:, -1, :])
+            return out[:, -1, :]
+        else:
+            return self.cbet(inputs, goals, action)[1]
+                       
+def load_model(model, path='/home/hnguyen/cloth_smoothing/equiRL/learn_repr.pt'):
     state_dict = torch.load(path, map_location=torch.device('cpu'))
     model.load_state_dict(state_dict)
-    if representation:
-        model.fc = nn.Identity()
     model.eval()
     return model
 
 # Define a custom dataset to load the NPY files
 class NPYDataset(Dataset):
-    def __init__(self, npy_files, columns=['NPY_Path'], play=True):
+    def __init__(self, npy_files, columns=['NPY_Path'], play=True, representation_learning=False, rnn=False):
         self.data = pd.read_csv(npy_files, usecols=columns).values
-        self.play = play
+        self.rnn = rnn
+        self.play = play # whether use play data for representation learning
+        self.representation_learning = representation_learning
     def __len__(self):
         return len(self.data)
     
@@ -167,75 +255,109 @@ class NPYDataset(Dataset):
         if self.play:
             npy_file = self.data[idx][0]
             frame = np.load(npy_file, allow_pickle=True)
-            return frame
+            obses = []
+            next_obses = []
+            for i in range(len(frame)):
+                obs = frame[i][0].to(torch.float32) / 255.0
+                next_obs = frame[i][3].to(torch.float32) / 255.0
+                obses.append(obs.squeeze(0))
+                next_obses.append(next_obs.squeeze(0))
+            obses = torch.stack(obses, dim=0)
+            next_obses = torch.stack(next_obses, dim=0)
+            return tuple([obses, next_obses])
         else:
             length, final_step_str, npy_file = self.data[idx]
             frame = np.load(npy_file, allow_pickle=True)
             final_step_str = final_step_str.replace('[', '').replace(']', '').split(',')
             final_step = [int(i) for i in final_step_str]
-            return length, final_step, frame
-
-class RNN_dataset(Dataset):
-    def __init__(self, dataset, max_length=201):
-        super(RNN_dataset, self).__init__()
-        self.dataset = dataset
-
-        self.trajs = []
-        for length, final_step, frame in dataset:
+            obses = []
+            actions = []
+            next_obses = []
+            picker_states = []
+            next_picker_states = []
+            goals = []
+            goal_picker_states = []
+            steps = []
             j = 0
-            traj = []
-            for k in range(1, len(frame)+1):
-                obs = frame[k-1][0]
-                picker_state = frame[k-1][5]
-                next_picker_state = frame[k-1][6]
-                goal_obs = frame[final_step[j]-1][3]
-                goal_picker_state = frame[final_step[j]-1][6]
-                step = final_step[j] - k + 1
-                action = frame[k-1][1]
-
-                obs = obs.to(dtype=torch.float32) / 255.0
-                picker_state = torch.tensor(picker_state, dtype=torch.float32)
-                action = torch.tensor(action, dtype=torch.float32)
-                goal_obs = goal_obs.to(dtype=torch.float32) / 255.0
-                goal_picker_state = torch.tensor(goal_picker_state, dtype=torch.float32)
-                step = torch.tensor(step, dtype=torch.float32)
-                
-                if k == final_step[j]:
+            for i in range(1, len(frame) + 1):
+                obs = frame[i-1][0].to(torch.float32) / 255.0
+                picker_state = torch.from_numpy(frame[i-1][5]).to(torch.float32)
+                action = torch.from_numpy(frame[i-1][1]).to(torch.float32)
+                next_obs = frame[i-1][3].to(torch.float32) / 255.0
+                next_picker_state = torch.from_numpy(frame[i-1][6]).to(torch.float32)
+                goal = frame[final_step[j]-1][3].to(torch.float32) / 255.0
+                goal_picker_state = torch.from_numpy(frame[final_step[j]-1][6]).to(torch.float32)
+                step = final_step[j] - i + 1
+                obses.append(obs.squeeze(0))
+                actions.append(action)
+                next_obses.append(next_obs.squeeze(0))
+                picker_states.append(picker_state)
+                next_picker_states.append(next_picker_state)
+                goals.append(goal.squeeze(0))
+                goal_picker_states.append(goal_picker_state)
+                steps.append(step)
+                if i == final_step[j]:
                     j += 1
-                traj.append([obs, picker_state, action, goal_obs, goal_picker_state, step])
-            self.trajs.append(traj)
+                if self.rnn and j == 3:
+                    break
+            obses = torch.stack(obses, dim=0)
+            picker_states = torch.stack(picker_states, dim=0)
+            actions = torch.stack(actions, dim=0)
+            next_obses = torch.stack(next_obses, dim=0)
+            next_picker_states = torch.stack(next_picker_states, dim=0)
+            goals = torch.stack(goals, dim=0)
+            goal_picker_states = torch.stack(goal_picker_states, dim=0)
+            steps = torch.from_numpy(np.array(steps)).to(torch.float32)
+            if self.representation_learning:
+                if len(obses) > 120:
+                    random_idx = np.random.randint(0, len(obses)-120)
+                    obses = obses[random_idx:random_idx+120]
+                    next_obses = next_obses[random_idx:random_idx+120]
+                return tuple([obses, next_obses])
+            else:
+                return tuple([obses, actions, next_obses, goals, picker_states, next_picker_states, goal_picker_states, steps])
+
+class BeT_Dataset(Dataset):
+    def __init__(self, 
+                 npy_file, 
+                 columns=['Length', 'NPY_Path'], 
+                 window_size=10):
+        # load file npy
+        self.dataset = pd.read_csv(npy_file, usecols=columns).values
+        # take the number rows of dataset
+        self.window_size = window_size
+        self.slices = []
+        for i in range(len(self.dataset)):
+            T = self.dataset[i][0] - 1
+            for j in range(T - self.window_size):
+                self.slices.append((i, j, j + self.window_size))
     
     def __len__(self):
-        return len(self.trajs)
-
-    def __getitem__(self, idx):
-        return self.trajs[idx]
-
-class Dataset_Repr(Dataset):
-    def __init__(self, data_list):
-        self.data_list = data_list
-    
-    def __len__(self):
-        return len(self.data_list)
+        return len(self.slices)
     
     def __getitem__(self, idx):
-        obs, next_obs = self.data_list[idx]
-        obs = obs.to(dtype=torch.float32)
-        next_obs = next_obs.to(dtype=torch.float32)
-        return obs, next_obs
-
-class Dataset_trajectories(Dataset):
-    def __init__(self, data_list):
-        self.data_list = data_list
+        i, start, end = self.slices[idx]
+        data = np.load(self.dataset[i][1], allow_pickle=True)
+        obs = []
+        picker_state = []
+        action = []
+        data = data[start:end]
+        for j in range(len(data)):
+            obs.append(data[j][0].to(torch.float32) / 255.0)
+            picker_state.append(torch.from_numpy(data[j][5]).to(torch.float32))
+            action.append(torch.from_numpy(data[j][1]).to(torch.float32))
+        obs = torch.stack(obs, dim=0).squeeze(1)
+        picker_state = torch.stack(picker_state, dim=0)
+        action = torch.stack(action, dim=0)
+        assert obs.shape[0] == self.window_size
+        assert picker_state.shape[0] == self.window_size
+        assert action.shape[0] == self.window_size
+        return tuple([obs, picker_state, action])
     
-    def __len__(self):
-        return len(self.data_list)
-    
-    def __getitem__(self, idx):
-        traj = self.data_list[idx]
-        return traj
-    
-def train_representation_learning(model, dataloader, device, img_size=224, num_epochs=100):
+def train_representation_learning(dataloader_play, dataloader_demo, device, img_size=224, num_epochs=100):
+    model = resnet18(pretrained=False)
+    model.conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
+    model.to(device)
     losses = []
     learner = BYOL(
         model,
@@ -244,123 +366,105 @@ def train_representation_learning(model, dataloader, device, img_size=224, num_e
     )
     learner = learner.to(device)
     opt = torch.optim.Adam(learner.parameters(), lr=3e-4)
+    scaler = GradScaler()
     for _ in range (num_epochs):
         l = 0
-        for idx, data in tqdm(enumerate(dataloader)):
-            obs = data[0].view(-1, 4, img_size, img_size)
-            obs /= 255.0
-            obs = obs.to(device)
-            next_obs = data[1].view(-1, 4, img_size, img_size)
-            next_obs /= 255.0
-            next_obs = next_obs.to(device)
-            loss = learner(obs, next_obs)
-            l += loss.item()
+        for idx, data in tqdm(enumerate(dataloader_play)):
+            obs_play, next_obs_play = data
+            obs_play = obs_play.to(device).squeeze(0)
+            next_obs_play = next_obs_play.to(device).squeeze(0)
+
+            random_idx = np.random.randint(0, len(dataloader_demo))
+            obs_demo, next_obs_demo = dataset_demo[random_idx]
+            obs_demo = obs_demo.to(device)
+            next_obs_demo = next_obs_demo.to(device)
+
+            # Concatenate the observations
+            obs = torch.cat((obs_play, obs_demo), dim=0)
+            next_obs = torch.cat((next_obs_play, next_obs_demo), dim=0)
             opt.zero_grad()
-            loss.backward()
-            opt.step()
+            with autocast():
+                loss = learner(obs, next_obs)
+            scaler.scale(loss).backward()
+            scaler.step(opt)
+            scaler.update()
             learner.update_moving_average()
-        losses.append(l)
-        if (_ + 1) % 10 == 0:   
-            print('[INFO] Epoch: {}, Loss: {}'.format(_+1, l))
+            l += loss.item()
+        losses.append(l/len(dataloader_play))
+        if (_ + 1) % 5 == 0:   
+            print('[INFO] Epoch: {}, Loss: {}'.format(_+1, l/len(dataloader_play)))
 
     # Save the model
-    torch.save(model.state_dict(), 'learned_repr.pt')
-
+    torch.save(model.state_dict(), './model/pretrained_observation_model.pt')
     # Plot the losses
     plt.plot(losses)
     plt.title('Representation Learning Losses (BYOL)')
     plt.xlabel('Epochs')
     plt.ylabel('Losses')
-    plt.savefig('representation_losses.png')
+    plt.savefig('./model/representation_losses.png')
     plt.close()
 
-def train_BC(model, bc_model, expert_dataloader, device, img_size=224, num_epochs=100, k=32):
-    model.eval()
-    bc_model.train()
-    bc_opt = torch.optim.Adam(bc_model.parameters(), lr=3e-4)
+def train_BC(model, dataloader_demo, device, num_epochs=100, use_pretrained_0_train=False, name_model="BC"):
+    model.train()
+    bc_opt = torch.optim.Adam(model.parameters(), lr=3e-4)
     bc_losses = []
     best_loss = np.inf
+    scaler = GradScaler()
     for _ in range(num_epochs):
         l = 0
-        for traj in expert_dataloader:
-            for i in range(0, len(traj), k):
-                obs = torch.stack([t[0] for t in traj[i:i+k]], dim=0).view(-1, 4, img_size, img_size).to(device)
-                picker_state = torch.stack([t[1] for t in traj[i:i+k]], dim=0).view(-1, 2).to(device)
-                action = torch.stack([t[2] for t in traj[i:i+k]], dim=0).view(-1, 8).to(device)
-                with torch.no_grad():
-                    repr = model(obs)
-                # Concatenate the picker state
-                repr = torch.cat((repr, picker_state), dim=1)
-                pred = bc_model(repr)
-                loss = nn.MSELoss()(pred, action)
-                bc_opt.zero_grad()
-                loss.backward()
-                bc_opt.step()
-                l += loss.item()
-
-        bc_losses.append(l)
-        if (_ + 1) % 10 == 0:
-            print('[INFO] Epoch: {}, Loss: {}'.format(_+1, l))
-        if l < best_loss:
-            best_loss = l
-            torch.save(bc_model.state_dict(), 'bc_model.pt')
-
+        for i, data in tqdm(enumerate(dataloader_demo)):
+            if name_model == "BC":
+                obs = data[0].to(device).squeeze(0)
+                picker_state = data[4].to(device).squeeze(0)
+                action = data[1].to(device).squeeze(0)
+            elif name_model == "BC_RNN":
+                obs = data[0].to(device)
+                picker_state = data[4].to(device)
+                action = data[1].to(device)
+            elif name_model == "BeT":
+                obs = data[0].to(device)
+                picker_state = data[1].to(device)
+                action = data[2].to(device)
+            else:
+                raise ValueError("Model name is not correct")
+            bc_opt.zero_grad()
+            with autocast():
+                if name_model == "BeT":
+                    loss = model(obs, picker_state, action)
+                else:
+                    pred = model(obs, picker_state)
+                    loss = nn.MSELoss()(pred, action)
+            if use_pretrained_0_train:
+                for param in model.model.parameters():
+                    assert param.requires_grad == False
+            else:
+                for param in model.model.parameters():
+                    assert param.requires_grad == True
+            scaler.scale(loss).backward()
+            scaler.unscale_(bc_opt)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
+            scaler.step(bc_opt)
+            scaler.update()
+            l += loss.item()
+        bc_losses.append(l/len(dataloader_demo))
+        if (_ + 1) % 5 == 0:
+            print('[INFO] Epoch: {}, Loss: {}'.format(_+1, l/len(dataloader_demo)))
+        if l/len(dataloader_demo) < best_loss:
+            best_loss = l/len(dataloader_demo)
+            if use_pretrained_0_train:
+                torch.save(model.state_dict(), f'./model/{name_model}_0_finetune_pretrained.pt')
+            else:
+                torch.save(model.state_dict(), f'./model/{name_model}.pt')
     # Plot the losses
     plt.figure()
     plt.plot(bc_losses)
-    plt.title('BC Losses')
+    plt.title(f'{name_model} Losses')
     plt.xlabel('Epochs')
     plt.ylabel('Losses')
-    plt.savefig('bc_losses.png')
-    plt.close()
-
-def train_BC_RNN(model, bc_rnn_model, expert_dataloader, device, img_size=224, num_epochs=100, k=32):
-    # model.eval()
-    model.train()
-    bc_rnn_opt = torch.optim.Adam(bc_rnn_model.parameters(), lr=3e-4)
-    bc_rnn_losses = []
-    best_loss = np.inf
-    for _ in range(num_epochs):
-        l = 0
-        for traj in expert_dataloader:
-            repr_traj = []
-            action_traj = []
-            for i in range(0, len(traj), k):
-                obs = torch.stack([t[0] for t in traj[i:i+k]], dim=0).view(-1, 4, img_size, img_size).to(device)
-                picker_state = torch.stack([t[1] for t in traj[i:i+k]], dim=0).view(-1, 2).to(device)
-                action = torch.stack([t[2] for t in traj[i:i+k]], dim=0).view(-1, 8).to(device)
-                # with torch.no_grad():
-                repr = model(obs)
-                # Concatenate the picker state
-                repr = torch.cat((repr, picker_state), dim=1)
-                repr_traj.append(repr)
-                action_traj.append(action)
-            repr_traj = torch.cat(repr_traj, dim=0).unsqueeze(0)
-            action_traj = torch.cat(action_traj, dim=0)
-
-            # Train the RNN
-            action_pred = bc_rnn_model(repr_traj).squeeze(0)
-            loss = nn.MSELoss()(action_pred, action_traj)
-            bc_rnn_opt.zero_grad()
-            loss.backward()
-            bc_rnn_opt.step()
-            l += loss.item()
-
-        bc_rnn_losses.append(l)
-        if (_ + 1) % 10 == 0:
-            print('[INFO] Epoch: {}, Loss: {}'.format(_+1, l))
-        if l < best_loss:
-            best_loss = l
-            torch.save(bc_rnn_model.state_dict(), 'bc_rnn_model_0_repr.pt')
-            torch.save(model.state_dict(), 'learned_0_repr.pt')
-
-    # Plot the losses
-    plt.figure()
-    plt.plot(bc_rnn_losses)
-    plt.title('BC RNN Losses 0 repr')
-    plt.xlabel('Epochs')
-    plt.ylabel('Losses')
-    plt.savefig('bc_rnn_losses.png')
+    if use_pretrained_0_train:
+        plt.savefig(f'./model/{name_model}_0_finetune_pretrained.png')
+    else:
+        plt.savefig(f'./model/{name_model}.png')
     plt.close()
     
 def train_dynamical_step(model, dynamical_model, expert_dataloader, device, img_size=224, num_epochs=100, k=32):
@@ -410,52 +514,93 @@ def train_dynamical_step(model, dynamical_model, expert_dataloader, device, img_
     plt.close()
 
 if __name__ == '__main__':
-    # Load the dataset
-    dataloaders = []
-    batch_size = 300
-    dataset_play = NPYDataset(npy_files='/home/hnguyen/cloth_smoothing/equiRL/data/equi/video/play.csv', columns=['NPY_Path'], play=True)
-    for frame in dataset_play:
-        for i in range(len(frame)):
-            obs = frame[i][0]
-            next_obs = frame[i][3]
-            # add to dataloader
-            dataloaders.append([obs, next_obs])
-    dataset_demo = NPYDataset(npy_files='/home/hnguyen/cloth_smoothing/equiRL/data/equi/video/demo.csv', columns=['Length', 'Final_step', 'NPY_Path'], play=False)
-    for length, final_step, frame in dataset_demo:
-        for i in range(len(frame)):
-            obs = frame[i][0]
-            next_obs = frame[i][3]
-            # add to dataloader
-            dataloaders.append([obs, next_obs])
-    my_dataloader = Dataset_Repr(dataloaders)
-    dataloader = DataLoader(my_dataloader, batch_size=batch_size, shuffle=True, num_workers=4)
-
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # Define the model
-    model = resnet18(pretrained=False)
-    model.conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
-    model.fc = nn.Identity()
-    model.to(device)
-    # train_representation_learning(model, dataloader, device, img_size=168, num_epochs=100)
-    # Load the dataset and build dataloader for BC
-
-    ep_dataset = RNN_dataset(dataset_demo)
-    expert_dataloader  = DataLoader(ep_dataset, batch_size=1, shuffle=False, num_workers=4)
+    # Load the dataset
+    batch_size = 1
+    # dataset_play = NPYDataset(npy_files='/home/hnguyen/cloth_smoothing/equiRL/data/equi/video/play.csv', columns=['NPY_Path'], play=True)
+    # dataset_demo = NPYDataset(npy_files='/home/hnguyen/cloth_smoothing/equiRL/data/equi/video/demo.csv', columns=['Length', 'Final_step', 'NPY_Path'], play=False, representation_learning=True)
+    # dataloader_play = DataLoader(dataset_play, batch_size=1, shuffle=True, num_workers=4)
+    # dataloader_demo = DataLoader(dataset_demo, batch_size=1, shuffle=True, num_workers=4)
+    # Train the representation learning
+    # train_representation_learning(dataloader_play, dataloader_demo, device, img_size=168, num_epochs=50)
     
-    # Load the Representation model
-    # model = load_model(model, path='/home/hnguyen/cloth_smoothing/equiRL/learned_repr.pt', representation=True).to(device)
-    # model.eval()
-
-    # Define the BC model
-    # bc_model = MLP_BC(input_dim=514, output_dim=8, hidden_dim=256).to(device)
-    # train_BC(model, bc_model, expert_dataloader, device, img_size=168, num_epochs=100)
-    # bc_model = load_model(bc_model, path='/home/hnguyen/cloth_smoothing/equiRL/bc_model.pt', representation=False)
+    # # Define the BC model
+    # dataset_demo = NPYDataset(npy_files='/home/hnguyen/cloth_smoothing/equiRL/data/equi/video/demo.csv', columns=['Length', 'Final_step', 'NPY_Path'], play=False, representation_learning=False)
+    # dataloader_demo = DataLoader(dataset_demo, batch_size=1, shuffle=False, num_workers=4)
+    # Train BC model use pretrained model but not finetune 
+    # bc_model_0_finetune_pretrained = BC_model(input_dim=514,
+    #                                        output_dim=8,
+    #                                        hidden_dim=256,
+    #                                        use_pretrained_0_train=True,
+    #                                        path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/model/pretrained_observation_model.pt').to(device)
+    # train_BC(model=bc_model_0_finetune_pretrained,
+    #          dataloader_demo=dataloader_demo,
+    #          device=device,
+    #          num_epochs=100,
+    #          use_pretrained_0_train=True, 
+    #          name_model="BC")
+    # Train BC model use pretrained model and finetune
+    # bc_model_finetune_pretrained = BC_model(input_dim=514,
+    #                             output_dim=8,
+    #                             hidden_dim=256,
+    #                             use_pretrained_0_train=False,
+    #                             path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/model/pretrained_observation_model.pt').to(device)
+    # train_BC(model=bc_model_finetune_pretrained,
+    #          dataloader_demo=dataloader_demo,
+    #          device=device,
+    #          num_epochs=100,
+    #          use_pretrained_0_train=False,
+    #          use_rnn=False)
     # Define BC RNN model
-    bc_rnn_model = RNN_MIMO_MLP(rnn_input_dim=514, rnn_hidden_dim=1024, rnn_num_layers=2, rnn_type="LSTM", rnn_is_bidirectional=False).to(device)
-    train_BC_RNN(model, bc_rnn_model, expert_dataloader, device, img_size=168, num_epochs=100)
-    bc_rnn_model = load_model(bc_rnn_model, path='/home/hnguyen/cloth_smoothing/equiRL/bc_rnn_model_0_repr.pt', representation=False)
-    exit()
+    dataset_demo_rnn = NPYDataset(npy_files='/home/hnguyen/cloth_smoothing/equiRL/data/equi/video/demo_1_fling.csv', columns=['Length', 'Final_step', 'NPY_Path'], play=False, representation_learning=False, rnn=True)    
+    dataloader_rnn = DataLoader(dataset_demo_rnn, batch_size=1, shuffle=False, num_workers=16)
+
+    # bc_rnn_model_0_finetune_pretrained = RNN_MIMO_MLP(output_dim=8,
+    #                                                   hidden_dim=256,
+    #                                                   rnn_input_dim=514,
+    #                                                   rnn_hidden_dim=1024,
+    #                                                   rnn_num_layers=2,
+    #                                                   rnn_type="LSTM",
+    #                                                   use_pretrained_0_train=True,
+    #                                                   path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/model/pretrained_observation_model.pt').to(device)
+    # train_BC(model=bc_rnn_model_0_finetune_pretrained,
+    #          dataloader_demo=dataloader_rnn,
+    #          device=device,
+    #          num_epochs=50,
+    #          use_pretrained_0_train=True,
+    #          use_rnn=True)
+    bc_rnn_model_finetune_pretrained = RNN_MIMO_MLP(output_dim=8,
+                                                    hidden_dim=256,
+                                                    rnn_input_dim=514,
+                                                    rnn_hidden_dim=1024,
+                                                    rnn_num_layers=2,
+                                                    rnn_type="LSTM",
+                                                    use_pretrained_0_train=False,
+                                                    path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/model/pretrained_observation_model.pt').to(device)
     
+    train_BC(model=bc_rnn_model_finetune_pretrained,
+             dataloader_demo=dataloader_rnn,
+             device=device,
+             num_epochs=100,
+             use_pretrained_0_train=False,
+             name_model="BC_RNN")
+    exit()
+    # dataset_bet = BeT_Dataset(npy_file='/home/hnguyen/cloth_smoothing/equiRL/data/equi/video/demo.csv', )
+    # dataloader_bet = DataLoader(dataset_bet, batch_size=100, shuffle=True, num_workers=16)
+    
+    # bet_model = BeT_model(input_dim=514,
+    #                       act_dim=8,
+    #                       n_clusters=64,
+    #                       k_means_fit_steps=500,
+    #                       use_pretrained_0_train=False,
+    #                       path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/model/BC_0_finetune_pretrained.pt').to(device)
+    # train_BC(model=bet_model,
+    #          dataloader_demo=dataloader_bet,
+    #          device=device,
+    #          num_epochs=30,
+    #          use_pretrained_0_train=False,
+    #          name_model="BeT")
+    # exit()
     # Define the dynamical model
     # dynamical_model = Dynamical_Model(input_dim=514, output_dim=1, hidden_dim=256).to(device)
     # train_dynamical_step(model, dynamical_model, expert_dataloader, device, img_size=168, num_epochs=100)
@@ -463,26 +608,28 @@ if __name__ == '__main__':
 
 
     # Save the representation and action
+    model = resnet18(pretrained=False)
+    model.conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)    
+    model = load_model(model, path='/home/hnguyen/cloth_smoothing/equiRL/model/pretrained_observation_model.pt')
+    model.fc = nn.Identity()
+    model.to(device)
     reprs = []
     actions = []
     goals = []
-    for traj in expert_dataloader:
-        for i in range(0, len(traj), 100):
-            obs = torch.stack([t[0] for t in traj[i:i+100]], dim=0).view(-1, 4, 168, 168).to(device)
-            picker_state = torch.stack([t[1] for t in traj[i:i+100]], dim=0).view(-1, 2).to(device)
-            action = torch.stack([t[2] for t in traj[i:i+100]], dim=0).view(-1, 8).to(device)
-            goal_obs = torch.stack([t[3] for t in traj[i:i+100]], dim=0).view(-1, 4, 168, 168).to(device)
-            goal_picker_state = torch.stack([t[4] for t in traj[i:i+100]], dim=0).view(-1, 2).to(device)
-            with torch.no_grad():
-                repr = model(obs)
-                goal_repr = model(goal_obs)
-            # Concatenate the picker state
-            repr = torch.cat((repr, picker_state), dim=1)
-            reprs.append(repr)
-            actions.append(action)
-            goal_repr = torch.cat((goal_repr, goal_picker_state), dim=1)
-            goals.append(goal_repr)
-
+    for traj in tqdm(dataloader_demo):
+        obs = traj[0].to(device).squeeze(0)
+        picker_state = traj[4].to(device).squeeze(0)
+        goal = traj[3].to(device).squeeze(0)
+        goal_picker_state = traj[6].to(device).squeeze(0)
+        action = traj[1].to(device).squeeze(0)
+        with torch.no_grad():
+            repr = model(obs)
+            goal_repr = model(goal)
+        repr = torch.cat((repr, picker_state), dim=1)
+        goal_repr = torch.cat((goal_repr, goal_picker_state), dim=1)
+        reprs.append(repr)
+        actions.append(action)
+        goals.append(goal_repr)
     reprs = torch.cat(reprs, dim=0)
     actions = torch.cat(actions, dim=0)
     goals = torch.cat(goals, dim=0)
@@ -491,6 +638,6 @@ if __name__ == '__main__':
     print('[INFO] Representation shape: {}'.format(reprs.shape))
     print('[INFO] Action shape: {}'.format(actions.shape))
     print('[INFO] Goal shape: {}'.format(goals.shape))
-    torch.save(reprs, 'reprs.pt')
-    torch.save(actions, 'actions.pt')
-    torch.save(goals, 'goals.pt')
+    torch.save(reprs, './model/reprs.pt')
+    torch.save(actions, './model/actions.pt')
+    torch.save(goals, './model/goals.pt')

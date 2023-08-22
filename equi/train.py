@@ -6,7 +6,7 @@ import time
 import json
 import copy
 import cv2
-
+from collections import deque
 from equi import utils
 from equi.logger import Logger
 import escnn
@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 
 import wandb
 import gc
-from equi.representation_learning import load_model, MLP_BC, RNN_MIMO_MLP
+from equi.representation_learning import load_model, BC_model, RNN_MIMO_MLP, BeT_model
 from torchvision.models import resnet18
 import torch.nn as nn
 
@@ -230,24 +230,60 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
     all_ep_rewards = []
 
     def run_eval_loop(sample_stochastically=True):
-        # bc_model = MLP_BC(input_dim=514, output_dim=8, hidden_dim=256)
-        # bc_model = load_model(bc_model, path='/home/hnguyen/cloth_smoothing/equiRL/bc_model.pt', representation=False).to(device)
-        
-        bc_rnn_model = RNN_MIMO_MLP(rnn_input_dim=514, rnn_hidden_dim=1024, rnn_num_layers=2, rnn_type="LSTM", rnn_is_bidirectional=False)
-        bc_rnn_model = load_model(bc_rnn_model, path='/home/hnguyen/cloth_smoothing/equiRL/bc_rnn_model_0_repr.pt', representation=False).to(device)
+        repr_save = torch.load('/home/hnguyen/cloth_smoothing/equiRL/model/reprs.pt')
+        action_save = torch.load('/home/hnguyen/cloth_smoothing/equiRL/model/actions.pt')
 
-        repr_model = resnet18(pretrained=False)
-        repr_model.conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        repr_model.fc = nn.Identity()
-        repr_model = load_model(repr_model, path='/home/hnguyen/cloth_smoothing/equiRL/learned_0_repr.pt', representation=False).to(device)
+        model = resnet18(pretrained=False)
+        model.conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        load_model(model, '/home/hnguyen/cloth_smoothing/equiRL/model/pretrained_observation_model.pt')
+        model.fc = nn.Identity()
+        model = model.to(device)
 
-        # repr_save = torch.load('/home/hnguyen/cloth_smoothing/equiRL/reprs.pt')
-        # action_save = torch.load('/home/hnguyen/cloth_smoothing/equiRL/actions.pt')
+        bc_model_finetune_pretrained = BC_model(input_dim=514,
+                                                output_dim=8,
+                                                hidden_dim=256,
+                                                use_pretrained_0_train=False,
+                                                path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/model/pretrained_observation_model.pt')
+        # load_model(bc_model_finetune_pretrained, '/home/hnguyen/cloth_smoothing/equiRL/model/BC_0_finetune_pretrained.pt').to(device)
+        load_model(bc_model_finetune_pretrained, '/home/hnguyen/cloth_smoothing/equiRL/model/BC.pt').to(device)
+
+        bc_rnn_model_0_finetune_pretrained = RNN_MIMO_MLP(output_dim=8,
+                                                      hidden_dim=256,
+                                                      rnn_input_dim=514,
+                                                      rnn_hidden_dim=1024,
+                                                      rnn_num_layers=2,
+                                                      rnn_type="LSTM",
+                                                      use_pretrained_0_train=False,
+                                                      path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/model/pretrained_observation_model.pt').to(device)
+        load_model(bc_rnn_model_0_finetune_pretrained, '/home/hnguyen/cloth_smoothing/equiRL/model/BC_RNN.pt').to(device)
+
+        bet_model = BeT_model(input_dim=514,
+                          act_dim=8,
+                          n_clusters=64,
+                          k_means_fit_steps=500,
+                          use_pretrained_0_train=False,
+                          path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/model/BC_0_finetune_pretrained.pt').to(device)
+        load_model(bet_model, '/home/hnguyen/cloth_smoothing/equiRL/model/BeT.pt').to(device)
 
         start_time = time.time()
         prefix = 'stochastic_' if sample_stochastically else ''
         infos = []
         all_frames = []
+        test_expert = False
+        vinn = False
+        bc = False
+        bc_rnn = True
+        bet = False
+        if vinn:
+            name = 'vinn'
+        elif bc:
+            name = 'bc'
+        elif bc_rnn:
+            name = 'bc_rnn'
+        elif test_expert:
+            name = 'expert'
+        elif bet:
+            name = 'bet'
         plt.figure()
         for i in range(num_episodes):
             obs = env.reset(eval_flag=True)
@@ -260,80 +296,103 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
             episode_step = 0
             expert_data = []
             final_step = []
-            # for _ in range(3):
-            #     fling = utils.fling_demonstrations(env,
-            #                                            obs,
-            #                                            picker_state,
-            #                                            episode_step,
-            #                                            frames,
-            #                                            expert_data,
-            #                                            ep_info,
-            #                                            final_step,
-            #                                            img_size=128)
-            #     if fling is None or fling == 1 or _ == 2:
-            #         fill = utils.fill_episode_with_all_zeros_action(env,
-            #                                                         obs,
-            #                                                         picker_state,
-            #                                                         episode_step,
-            #                                                         frames,
-            #                                                         expert_data,
-            #                                                         ep_info,
-            #                                                         final_step,
-            #                                                         img_size=128)
-            #         break
-            #     else:
-            #         episode_step = fling[0]
-            #         obs = fling[1]
-            #         picker_state = fling[2]
-            
-            rnn_state = bc_rnn_model.get_rnn_init_state(batch_size=1, device=device)            
-            while not done:
-                # center crop image
-                if args.encoder_type == 'pixel':
-                    obs = utils.center_crop_image(obs, args.image_size)
-                # with utils.eval_mode(agent):
-                #     if sample_stochastically:
-                #         action = agent.sample_action(obs,picker_state)
-                #     else:
-                #         action = agent.select_action(obs,picker_state)
-                # import ipdb; ipdb.set_trace()
-                obs = obs.to(dtype=torch.float32, device=device) / 255.0
-                repr = repr_model(obs.unsqueeze(0))
-                picker_state = torch.tensor(picker_state).unsqueeze(0).to(device)
-                repr_cat = torch.cat([repr, picker_state], dim=1)
-
-                action, rnn_state = bc_rnn_model.forward_step(repr_cat, rnn_state)
-                action = action.cpu().detach().numpy()
-
-                # action = bc_model(repr_cat)
-                # action = action.squeeze(0).cpu().detach().numpy()
-                # action = utils.predict_action(repr_cat, repr_save, action_save, k=5)
-                obs, reward, done, info = env.step(action)
-                episode_step += 1
-                episode_reward += reward
-                ep_info.append(info)
-                frames.append(env.get_image(128, 128))
-                rewards.append(reward)
-                picker_state = utils.get_picker_state(env)
-                if episode_step == env.horizon:
-                    done = True
-                    print(ep_info)
-            plt.plot(range(len(rewards)), rewards)
+            if test_expert:
+                for _ in range(3):
+                    fling = utils.fling_demonstrations(env,
+                                                           obs,
+                                                           picker_state,
+                                                           episode_step,
+                                                           frames,
+                                                           expert_data,
+                                                           ep_info,
+                                                           final_step,
+                                                           img_size=128)
+                    if fling is None or fling == 1 or _ == 2:
+                        fill = utils.fill_episode_with_all_zeros_action(env,
+                                                                        obs,
+                                                                        picker_state,
+                                                                        episode_step,
+                                                                        frames,
+                                                                        expert_data,
+                                                                        ep_info,
+                                                                        final_step,
+                                                                        img_size=128)
+                        break
+                    else:
+                        episode_step = fling[0]
+                        obs = fling[1]
+                        picker_state = fling[2]
+            else:
+                if bc_rnn:
+                    rnn_hidden_state = bc_rnn_model_0_finetune_pretrained.reset()
+                if bet:
+                    obs_rnn = deque(maxlen=5)
+                    picker_state_rnn = deque(maxlen=5)
+                while not done:
+                    # center crop image
+                    # if args.encoder_type == 'pixel':
+                    #     obs = utils.center_crop_image(obs, args.image_size)
+                    # with utils.eval_mode(agent):
+                    #     if sample_stochastically:
+                    #         action = agent.sample_action(obs,picker_state)
+                    #     else:
+                    #         action = agent.select_action(obs,picker_state)
+                    obs = obs.to(dtype=torch.float32, device=device) / 255.0
+                    numpy_obs = obs.cpu().detach().numpy()
+                    if bet:
+                        if episode_step == 0:
+                            for _ in range(5):
+                                obs_rnn.append(numpy_obs)
+                                picker_state_rnn.append(picker_state)
+                        else:
+                            obs_rnn.append(numpy_obs)
+                            picker_state_rnn.append(picker_state)
+                        obs = torch.from_numpy(np.stack(obs_rnn)).to(device)
+                        picker_state = torch.from_numpy(np.stack(picker_state_rnn)).to(device)
+                    else:
+                        picker_state = torch.tensor(picker_state).to(device)
+                    picker_state = picker_state.unsqueeze(0)
+                    if vinn:
+                        repr = model(obs)
+                        repr_cat = torch.cat([repr, picker_state], dim=1)
+                        action = utils.predict_action(repr_cat, repr_save, action_save, k=5)
+                    elif bc:
+                        action = bc_model_finetune_pretrained(obs, picker_state)
+                        action = action.cpu().squeeze(0).detach().numpy()
+                    elif bc_rnn:
+                        action, rnn_hidden_state = bc_rnn_model_0_finetune_pretrained.forward(obs, picker_state, rnn_hidden_state)
+                        action = action[0].squeeze(0).cpu().detach().numpy()
+                        # print(episode_step , action)
+                    elif bet:
+                        action = bet_model(obs, picker_state)
+                        action = action.cpu().detach().numpy()
+                    action = np.array([1, 0, 0, 0, 0, 0, 1, 0])
+                    obs, reward, done, info = env.step(action)
+                    picker_state = utils.get_picker_state(env)
+                    episode_step += 1
+                    episode_reward += reward
+                    ep_info.append(info)
+                    frames.append(env.get_image(128, 128))
+                    rewards.append(reward)
+                    if episode_step == env.horizon:
+                        done = True
+                        print(ep_info[-1])
+                plt.plot(range(len(rewards)), rewards)
             if len(all_frames) < 10:
                 print(len(frames))
                 all_frames.append(frames)
             infos.append(ep_info)
 
-            L.log('eval/' + prefix + 'episode_reward', episode_reward, step)
-            all_ep_rewards.append(episode_reward)
-        plt.xlabel('Timestep')
-        plt.ylabel('Reward')
-        plt.title('Reward over time')
-        plt.savefig(os.path.join(video_dir, '%d.png' % step))
-        plt.close()        
+        #     L.log('eval/' + prefix + 'episode_reward', episode_reward, step)
+        #     all_ep_rewards.append(episode_reward)
+        # plt.xlabel('Timestep')
+        # plt.ylabel('Reward')
+        # plt.title('Reward over time')
+        # plt.savefig(os.path.join(video_dir, '%d.png' % step))
+        # plt.close()        
         all_frames = np.array(all_frames).swapaxes(0, 1)
         all_frames = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in all_frames])
-        save_numpy_as_gif(all_frames, os.path.join(video_dir, '%d.gif' % step))
+        save_numpy_as_gif(all_frames, os.path.join(video_dir, f'%d_{name}.gif' % step))
 
         for key, val in get_info_stats(infos).items():
             L.log('eval/info_' + prefix + key, val, step)
@@ -517,6 +576,7 @@ def main(args):
     agent = None
 
     utils.create_demonstration(env, video_dir, args.num_demonstrations, img_size=128)
+    # utils.create_play_data(env, video_dir, args.num_demonstrations, img_size=128)
     exit()
 
 
