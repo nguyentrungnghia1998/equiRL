@@ -258,13 +258,10 @@ class NPYDataset(Dataset):
             obses = []
             next_obses = []
             for i in range(len(frame)):
-                obs = frame[i][0].to(torch.float32) / 255.0
-                next_obs = frame[i][3].to(torch.float32) / 255.0
+                obs = frame[i][0]
                 obses.append(obs.squeeze(0))
-                next_obses.append(next_obs.squeeze(0))
             obses = torch.stack(obses, dim=0)
-            next_obses = torch.stack(next_obses, dim=0)
-            return tuple([obses, next_obses])
+            return obses
         else:
             length, final_step_str, npy_file = self.data[idx]
             frame = np.load(npy_file, allow_pickle=True)
@@ -280,7 +277,7 @@ class NPYDataset(Dataset):
             steps = []
             j = 0
             for i in range(1, len(frame) + 1):
-                obs = frame[i-1][0].to(torch.float32) / 255.0
+                obs = frame[i-1][0]
                 picker_state = torch.from_numpy(frame[i-1][5]).to(torch.float32)
                 action = torch.from_numpy(frame[i-1][1]).to(torch.float32)
                 next_obs = frame[i-1][3].to(torch.float32) / 255.0
@@ -298,8 +295,8 @@ class NPYDataset(Dataset):
                 steps.append(step)
                 if i == final_step[j]:
                     j += 1
-                if self.rnn and j == 3:
-                    break
+                # if self.rnn and j == 3:
+                #     break
             obses = torch.stack(obses, dim=0)
             picker_states = torch.stack(picker_states, dim=0)
             actions = torch.stack(actions, dim=0)
@@ -312,9 +309,9 @@ class NPYDataset(Dataset):
                 if len(obses) > 120:
                     random_idx = np.random.randint(0, len(obses)-120)
                     obses = obses[random_idx:random_idx+120]
-                    next_obses = next_obses[random_idx:random_idx+120]
-                return tuple([obses, next_obses])
+                return obses
             else:
+                obses = obses.to(torch.float32) / 255.0
                 return tuple([obses, actions, next_obses, goals, picker_states, next_picker_states, goal_picker_states, steps])
 
 class BeT_Dataset(Dataset):
@@ -369,22 +366,17 @@ def train_representation_learning(dataloader_play, dataloader_demo, device, img_
     scaler = GradScaler()
     for _ in range (num_epochs):
         l = 0
-        for idx, data in tqdm(enumerate(dataloader_play)):
-            obs_play, next_obs_play = data
+        # for idx, data in tqdm(enumerate(dataloader_play)):
+        for data_play, data_demo in tqdm(zip(dataloader_play, dataloader_demo)):
+            obs_play = data_play
             obs_play = obs_play.to(device).squeeze(0)
-            next_obs_play = next_obs_play.to(device).squeeze(0)
-
-            random_idx = np.random.randint(0, len(dataloader_demo))
-            obs_demo, next_obs_demo = dataset_demo[random_idx]
-            obs_demo = obs_demo.to(device)
-            next_obs_demo = next_obs_demo.to(device)
-
+            obs_demo= data_demo
+            obs_demo = obs_demo.to(device).squeeze(0)
             # Concatenate the observations
             obs = torch.cat((obs_play, obs_demo), dim=0)
-            next_obs = torch.cat((next_obs_play, next_obs_demo), dim=0)
             opt.zero_grad()
             with autocast():
-                loss = learner(obs, next_obs)
+                loss = learner(obs)
             scaler.scale(loss).backward()
             scaler.step(opt)
             scaler.update()
@@ -454,7 +446,7 @@ def train_BC(model, dataloader_demo, device, num_epochs=100, use_pretrained_0_tr
             if use_pretrained_0_train:
                 torch.save(model.state_dict(), f'./model/{name_model}_0_finetune_pretrained.pt')
             else:
-                torch.save(model.state_dict(), f'./model/{name_model}.pt')
+                torch.save(model.state_dict(), f'./model/{name_model}_1.pt')
     # Plot the losses
     plt.figure()
     plt.plot(bc_losses)
@@ -464,7 +456,7 @@ def train_BC(model, dataloader_demo, device, num_epochs=100, use_pretrained_0_tr
     if use_pretrained_0_train:
         plt.savefig(f'./model/{name_model}_0_finetune_pretrained.png')
     else:
-        plt.savefig(f'./model/{name_model}.png')
+        plt.savefig(f'./model/{name_model}_1.png')
     plt.close()
     
 def train_dynamical_step(model, dynamical_model, expert_dataloader, device, img_size=224, num_epochs=100, k=32):
@@ -517,12 +509,13 @@ if __name__ == '__main__':
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # Load the dataset
     batch_size = 1
-    # dataset_play = NPYDataset(npy_files='/home/hnguyen/cloth_smoothing/equiRL/data/equi/video/play.csv', columns=['NPY_Path'], play=True)
-    # dataset_demo = NPYDataset(npy_files='/home/hnguyen/cloth_smoothing/equiRL/data/equi/video/demo.csv', columns=['Length', 'Final_step', 'NPY_Path'], play=False, representation_learning=True)
-    # dataloader_play = DataLoader(dataset_play, batch_size=1, shuffle=True, num_workers=4)
-    # dataloader_demo = DataLoader(dataset_demo, batch_size=1, shuffle=True, num_workers=4)
+    dataset_play = NPYDataset(npy_files='/home/hnguyen/cloth_smoothing/equiRL/data/equi/video/play.csv', columns=['NPY_Path'], play=True)
+    dataset_demo = NPYDataset(npy_files='/home/hnguyen/cloth_smoothing/equiRL/data/equi/video/demo.csv', columns=['Length', 'Final_step', 'NPY_Path'], play=False, representation_learning=True)
+    dataloader_play = DataLoader(dataset_play, batch_size=1, shuffle=True, num_workers=4)
+    dataloader_demo = DataLoader(dataset_demo, batch_size=1, shuffle=True, num_workers=4)
     # Train the representation learning
-    # train_representation_learning(dataloader_play, dataloader_demo, device, img_size=168, num_epochs=50)
+    train_representation_learning(dataloader_play, dataloader_demo, device, img_size=168, num_epochs=50)
+    exit()
     
     # # Define the BC model
     # dataset_demo = NPYDataset(npy_files='/home/hnguyen/cloth_smoothing/equiRL/data/equi/video/demo.csv', columns=['Length', 'Final_step', 'NPY_Path'], play=False, representation_learning=False)
@@ -552,7 +545,7 @@ if __name__ == '__main__':
     #          use_pretrained_0_train=False,
     #          use_rnn=False)
     # Define BC RNN model
-    dataset_demo_rnn = NPYDataset(npy_files='/home/hnguyen/cloth_smoothing/equiRL/data/equi/video/demo_1_fling.csv', columns=['Length', 'Final_step', 'NPY_Path'], play=False, representation_learning=False, rnn=True)    
+    dataset_demo_rnn = NPYDataset(npy_files='/home/hnguyen/cloth_smoothing/equiRL/data/equi/video/demo.csv', columns=['Length', 'Final_step', 'NPY_Path'], play=False, representation_learning=False, rnn=True)    
     dataloader_rnn = DataLoader(dataset_demo_rnn, batch_size=1, shuffle=False, num_workers=16)
 
     # bc_rnn_model_0_finetune_pretrained = RNN_MIMO_MLP(output_dim=8,

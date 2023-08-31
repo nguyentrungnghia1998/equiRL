@@ -175,6 +175,8 @@ class BYOL(nn.Module):
         hidden_layer = -2,
         projection_size = 256,
         projection_hidden_size = 4096,
+        augment_fn = None,
+        augment_fn2 = None,
         moving_average_decay = 0.99,
         use_momentum = True
     ):
@@ -182,6 +184,37 @@ class BYOL(nn.Module):
         self.net = net
 
         # default SimCLR augmentation
+
+        # DEFAULT_AUG = torch.nn.Sequential(
+        #     RandomApply(
+        #         T.ColorJitter(0.8, 0.8, 0.8, 0.2),
+        #         p = 0.3
+        #     ),
+        #     T.RandomGrayscale(p=0.2),
+        #     T.RandomHorizontalFlip(),
+        #     RandomApply(
+        #         T.GaussianBlur((3, 3), (1.0, 2.0)),
+        #         p = 0.2
+        #     ),
+        #     T.RandomResizedCrop((image_size, image_size)),
+        #     T.Normalize(
+        #         mean=torch.tensor([0.485, 0.456, 0.406]),
+        #         std=torch.tensor([0.229, 0.224, 0.225])),
+        # )
+
+        # self.augment1 = default(augment_fn, DEFAULT_AUG)
+        # self.augment2 = default(augment_fn2, self.augment1)
+        self.augment1 = T.Compose([
+            RandomChangeBackgroundRGBD(p=0.5),
+            RandomColorJitterRGBD(p=0.5),
+            RandomGrayScaleRGBD(p=0.3),
+        ])
+        self.augment2 = T.Compose([
+            RandomChangeBackgroundRGBD(p=0.5),
+            RandomColorJitterRGBD(p=0.5),
+            RandomGrayScaleRGBD(p=0.3),
+        ])
+
         self.online_encoder = NetWrapper(net, projection_size, projection_hidden_size, layer=hidden_layer, use_simsiam_mlp=not use_momentum)
 
         self.use_momentum = use_momentum
@@ -195,7 +228,7 @@ class BYOL(nn.Module):
         self.to(device)
 
         # send a mock image tensor to instantiate singleton parameters
-        # self.forward(torch.randn(2, 4, image_size, image_size, device=device), torch.randn(2, 4, image_size, image_size, device=device))
+        # self.forward(torch.randn(2, 4, image_size, image_size, device=device))
 
     @singleton('target_encoder')
     def _get_target_encoder(self):
@@ -214,17 +247,22 @@ class BYOL(nn.Module):
 
     def forward(
         self,
-        x1,
-        x2=None,
+        x,
         return_embedding = False,
         return_projection = True
     ):
-        # assert not (self.training and x1.shape[0] == 1 and x2.shape[0] == 1), 'you must have greater than 1 sample when training, due to the batchnorm in the projection layer'
+        assert not (self.training and x.shape[0] == 1), 'you must have greater than 1 sample when training, due to the batchnorm in the projection layer'
 
         if return_embedding:
-            return self.online_encoder(x1, return_projection = return_projection)
-
-        image_one, image_two = x1, x2
+            return self.online_encoder(x, return_projection = return_projection)
+        image_one, image_two = self.augment1(x), self.augment2(x)
+        # from matplotlib import pyplot as plt
+        # plt.imshow(image_one[0, :3, :, :].permute(1, 2, 0).cpu().numpy())
+        # plt.savefig('image_one.png')
+        # plt.imshow(image_two[0, :3, :, :].permute(1, 2, 0).cpu().numpy())
+        # plt.savefig('image_two.png')
+        image_one = image_one.to(torch.float32) / 255.
+        image_two = image_two.to(torch.float32) / 255.
 
         online_proj_one, _ = self.online_encoder(image_one)
         online_proj_two, _ = self.online_encoder(image_two)
@@ -244,3 +282,46 @@ class BYOL(nn.Module):
 
         loss = loss_one + loss_two
         return loss.mean()
+    
+# class Augmentation RGBD images
+class RandomGrayScaleRGBD(object):
+    def __init__(self, p=0.5):
+        self.p = p
+        self.aug = T.Grayscale(num_output_channels=3)
+
+    def __call__(self, img):
+        if random.random() < self.p:
+            img_rgb = img[:, :3, :, :]
+            img_depth = img[:, 3:, :, :]
+            img_gray = self.aug(img_rgb)
+            img = torch.cat([img_gray, img_depth], dim=1)
+        return img
+
+class RandomColorJitterRGBD(object):
+    def __init__(self, p=0.5):
+        self.p = p
+        self.aug = T.ColorJitter(0.5, 0.5, 0.5, 0.2)
+
+    def __call__(self, img):
+        if random.random() < self.p:
+            img_rgb = img[:, :3, :, :]
+            img_depth = img[:, 3:, :, :]
+            img_rgb = self.aug(img_rgb)
+            img = torch.cat([img_rgb, img_depth], dim=1)
+        return img
+
+class RandomChangeBackgroundRGBD(object):
+    def __init__(self, p=0.5):
+        self.p = p
+    
+    def __call__(self, img):
+        if random.random() < self.p:
+            img_rgb = img[:, :3, :, :]
+            img_depth = img[:, 3:, :, :]
+            mask = (img_depth >= 253).squeeze(1)
+            img_rgb_masked = img_rgb.clone()
+            random_color = torch.rand(3)
+            for i in range(3):
+                img_rgb_masked[:, i, :, :][mask] = int(random_color[i] * 255)
+            img = torch.cat([img_rgb_masked, img_depth], dim=1)
+        return img

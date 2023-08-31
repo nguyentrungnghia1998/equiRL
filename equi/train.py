@@ -297,7 +297,7 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
             expert_data = []
             final_step = []
             if test_expert:
-                for _ in range(3):
+                for _ in range(1):
                     fling = utils.fling_demonstrations(env,
                                                            obs,
                                                            picker_state,
@@ -307,7 +307,7 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
                                                            ep_info,
                                                            final_step,
                                                            img_size=128)
-                    if fling is None or fling == 1 or _ == 2:
+                    if fling is None or fling == 1 or _ == 0:
                         fill = utils.fill_episode_with_all_zeros_action(env,
                                                                         obs,
                                                                         picker_state,
@@ -362,11 +362,9 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
                     elif bc_rnn:
                         action, rnn_hidden_state = bc_rnn_model_0_finetune_pretrained.forward(obs, picker_state, rnn_hidden_state)
                         action = action[0].squeeze(0).cpu().detach().numpy()
-                        # print(episode_step , action)
                     elif bet:
                         action = bet_model(obs, picker_state)
                         action = action.cpu().detach().numpy()
-                    action = np.array([1, 0, 0, 0, 0, 0, 1, 0])
                     obs, reward, done, info = env.step(action)
                     picker_state = utils.get_picker_state(env)
                     episode_step += 1
@@ -376,10 +374,10 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
                     rewards.append(reward)
                     if episode_step == env.horizon:
                         done = True
-                        print(ep_info[-1])
                 plt.plot(range(len(rewards)), rewards)
             if len(all_frames) < 10:
                 print(len(frames))
+                print(ep_info[-1])
                 all_frames.append(frames)
             infos.append(ep_info)
 
@@ -575,8 +573,8 @@ def main(args):
     # )
     agent = None
 
-    utils.create_demonstration(env, video_dir, args.num_demonstrations, img_size=128)
-    # utils.create_play_data(env, video_dir, args.num_demonstrations, img_size=128)
+    # utils.create_demonstration(env, video_dir, args.num_demonstrations, img_size=128)
+    utils.create_play_data(env, video_dir, args.num_demonstrations, img_size=128)
     exit()
 
 

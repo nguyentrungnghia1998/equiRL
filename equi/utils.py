@@ -951,14 +951,14 @@ def fling_primitive_1(env,
     episode_step += 1
     obs = next_obs
     picker_state = next_picker_state
-    # if done:
-        # final_step.append(episode_step)
-        # return 1
+    if done:
+        final_step.append(episode_step)
+        return 1
     if episode_step == env.horizon:
         return None
 
-    # wait 4 steps for the cloth to be stable
-    for _ in range(10):
+    # wait 1 steps for the cloth to be stable
+    for _ in range(1):
         action = np.array([0, 0, 0, -1, 0, 0, 0, -1])
         next_obs, reward, done, info = env.step(action)
         next_picker_state = get_picker_state(env)
@@ -968,14 +968,15 @@ def fling_primitive_1(env,
         episode_step += 1
         obs = next_obs
         picker_state = next_picker_state
-        # if done:
-        #     final_step.append(episode_step)
-        #     return 1
+        if done:
+            final_step.append(episode_step)
+            return 1
         if episode_step == env.horizon:
             return None
-    if ep_info[-1]['normalized_performance'] >= 0.6:
-        final_step.append(episode_step)
-        return 1
+    # if ep_info[-1]['normalized_performance'] >= 0.6:
+    #     final_step.append(episode_step)
+    #     return 1
+    final_step.append(episode_step)
     return [episode_step, obs, picker_state]
 
 def pick_and_drag(env, thresh, img_size=128):
@@ -1471,7 +1472,7 @@ def create_demonstration(env,
     print(f'[INFO] =================================================================================================')
     
     # create directory to save demonstratio
-    demo_npy = os.path.join(video_dir, 'demo_npy_1_fling')
+    demo_npy = os.path.join(video_dir, 'demo_npy')
     if not os.path.exists(demo_npy):
         os.makedirs(demo_npy, exist_ok=True)
 
@@ -1482,7 +1483,7 @@ def create_demonstration(env,
     Demo_Final_Step = []
     Demo_Num_Fling = []
     Demo_NPY = []
-    max_fling_times = 1
+    max_fling_times = 3
     mean = []
     while True:
         obs = env.reset()
@@ -1557,12 +1558,12 @@ def create_demonstration(env,
     #             break
     print(f'Mean: {np.mean(mean)}')
     df = pd.DataFrame({'Length': Demo_Length, 'Final_step': Demo_Final_Step, 'NPY_Path': Demo_NPY, 'NUM_FLING': Demo_Num_Fling})
-    df.to_csv(os.path.join(video_dir, 'demo_1_fling.csv'), index=False)
+    df.to_csv(os.path.join(video_dir, 'demo.csv'), index=False)
     for i in range(num_demonstrations//20):
         sub_all_frames_planner = all_frames_planner[i*20:(i+1)*20] 
         sub_all_frames_planner = np.array(sub_all_frames_planner).swapaxes(0, 1)
         sub_all_frames_planner = np.array([make_grid(np.array(frame), nrow=4, padding=3) for frame in sub_all_frames_planner])
-        save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'expert_{}_1_fling.gif'.format(i)))
+        save_numpy_as_gif(sub_all_frames_planner, os.path.join(video_dir, 'expert_{}.gif'.format(i)))
         if i >= 4:
             break
     return all_expert_data_planner
