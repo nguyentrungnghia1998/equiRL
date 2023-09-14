@@ -12,12 +12,12 @@ import time
 from skimage.util.shape import view_as_windows
 from collections import deque
 from scipy.ndimage import affine_transform
-from equi.default_config import DEFAULT_CONFIG
-from equi.segment_tree import SumSegmentTree, MinSegmentTree
+# from equi.default_config import DEFAULT_CONFIG
+# from equi.segment_tree import SumSegmentTree, MinSegmentTree
 from matplotlib import pyplot as plt
 from PIL import Image
 from scipy.spatial import ConvexHull
-from softgym.utils.visualization import save_numpy_as_gif, make_grid
+# from softgym.utils.visualization import save_numpy_as_gif, make_grid
 import cv2
 import pandas as pd
 
@@ -543,14 +543,13 @@ def perturb(current_image, next_image, dxy1, dxy2, set_theta_zero=False, set_tra
     transform = get_image_transform(theta, trans, pivot)
     transform_params = theta, trans, pivot
 
-    rot = np.array([[np.cos(theta), -np.sin(theta)], 
-                    [np.sin(theta), np.cos(theta)]])
+    rot = np.array([[np.cos(theta), np.sin(theta)], 
+                    [-np.sin(theta), np.cos(theta)]])
     rotated_dxy1 = rot.dot(dxy1)
     rotated_dxy1 = np.clip(rotated_dxy1, -1, 1)
     
     rotated_dxy2 = rot.dot(dxy2)
     rotated_dxy2 = np.clip(rotated_dxy2, -1, 1)
-    # import ipdb; ipdb.set_trace()
     # Apply rigid transform to image and pixel labels.
     if current_image.shape[0] == 1:
         current_image = affine_transform(current_image[0], np.linalg.inv(transform), mode='nearest', order=1).reshape(current_image.shape)
@@ -567,7 +566,7 @@ def perturb(current_image, next_image, dxy1, dxy2, set_theta_zero=False, set_tra
 
 
 def get_random_image_transform_params(image_size):
-    theta = np.random.random() * 2*np.pi
+    theta = np.random.uniform(-1, 1) * np.pi / 6
     trans = np.random.randint(0, image_size[0]//10, 2) - image_size[0]//20
     pivot = (image_size[1] / 2, image_size[0] / 2)
     return theta, trans, pivot

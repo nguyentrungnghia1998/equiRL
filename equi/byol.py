@@ -228,7 +228,7 @@ class BYOL(nn.Module):
         self.to(device)
 
         # send a mock image tensor to instantiate singleton parameters
-        # self.forward(torch.randn(2, 4, image_size, image_size, device=device))
+        self.forward(torch.randint(0, 255, (2, 4, image_size, image_size), device=device))
 
     @singleton('target_encoder')
     def _get_target_encoder(self):
@@ -256,11 +256,6 @@ class BYOL(nn.Module):
         if return_embedding:
             return self.online_encoder(x, return_projection = return_projection)
         image_one, image_two = self.augment1(x), self.augment2(x)
-        # from matplotlib import pyplot as plt
-        # plt.imshow(image_one[0, :3, :, :].permute(1, 2, 0).cpu().numpy())
-        # plt.savefig('image_one.png')
-        # plt.imshow(image_two[0, :3, :, :].permute(1, 2, 0).cpu().numpy())
-        # plt.savefig('image_two.png')
         image_one = image_one.to(torch.float32) / 255.
         image_two = image_two.to(torch.float32) / 255.
 

@@ -182,7 +182,6 @@ def update_env_kwargs(vv):
             del new_vv[v]
     return new_vv
 
-
 def vv_to_args(vv):
     class VArgs(object):
         def __init__(self, vv):
@@ -192,7 +191,6 @@ def vv_to_args(vv):
     args = VArgs(vv)
 
     return args
-
 
 def run_task(vv, log_dir=None, exp_name=None):
     updated_vv = copy.copy(DEFAULT_CONFIG)
@@ -225,7 +223,6 @@ def get_info_stats(infos):
         stat_dict[key + '_final'] = np.mean(stat_dict_all[key][:, -1])
     return stat_dict
 
-
 def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
     all_ep_rewards = []
 
@@ -245,7 +242,7 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
                                                 use_pretrained_0_train=False,
                                                 path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/model/pretrained_observation_model.pt')
         # load_model(bc_model_finetune_pretrained, '/home/hnguyen/cloth_smoothing/equiRL/model/BC_0_finetune_pretrained.pt').to(device)
-        load_model(bc_model_finetune_pretrained, '/home/hnguyen/cloth_smoothing/equiRL/model/BC.pt').to(device)
+        # load_model(bc_model_finetune_pretrained, '/home/hnguyen/cloth_smoothing/equiRL/model/BC.pt').to(device)
 
         bc_rnn_model_0_finetune_pretrained = RNN_MIMO_MLP(output_dim=8,
                                                       hidden_dim=256,
@@ -255,16 +252,17 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
                                                       rnn_type="LSTM",
                                                       use_pretrained_0_train=False,
                                                       path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/model/pretrained_observation_model.pt').to(device)
-        load_model(bc_rnn_model_0_finetune_pretrained, '/home/hnguyen/cloth_smoothing/equiRL/model/BC_RNN.pt').to(device)
+        # load_model(bc_rnn_model_0_finetune_pretrained, '/home/hnguyen/cloth_smoothing/equiRL/model/BC_RNN.pt').to(device)
+        # load_model(bc_rnn_model_0_finetune_pretrained, '/home/hnguyen/cloth_smoothing/equiRL/model/BC_RNN_0_finetune_pretrained.pt').to(device)
 
         bet_model = BeT_model(input_dim=514,
                           act_dim=8,
                           n_clusters=64,
                           k_means_fit_steps=500,
-                          use_pretrained_0_train=False,
-                          path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/model/BC_0_finetune_pretrained.pt').to(device)
+                          use_pretrained_0_train=True,
+                          path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/model/pretrained_observation_model.pt').to(device)
         load_model(bet_model, '/home/hnguyen/cloth_smoothing/equiRL/model/BeT.pt').to(device)
-
+        # load_model(bet_model, '/home/hnguyen/cloth_smoothing/equiRL/model/BeT_0_finetune_pretrained.pt').to(device)
         start_time = time.time()
         prefix = 'stochastic_' if sample_stochastically else ''
         infos = []
@@ -272,8 +270,8 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
         test_expert = False
         vinn = False
         bc = False
-        bc_rnn = True
-        bet = False
+        bc_rnn = False
+        bet = True
         if vinn:
             name = 'vinn'
         elif bc:
@@ -338,16 +336,12 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
                     #     else:
                     #         action = agent.select_action(obs,picker_state)
                     obs = obs.to(dtype=torch.float32, device=device) / 255.0
-                    numpy_obs = obs.cpu().detach().numpy()
                     if bet:
-                        if episode_step == 0:
-                            for _ in range(5):
-                                obs_rnn.append(numpy_obs)
-                                picker_state_rnn.append(picker_state)
-                        else:
-                            obs_rnn.append(numpy_obs)
-                            picker_state_rnn.append(picker_state)
+                        numpy_obs = obs.cpu().detach().numpy()
+                        obs_rnn.append(numpy_obs)
+                        picker_state_rnn.append(picker_state)
                         obs = torch.from_numpy(np.stack(obs_rnn)).to(device)
+                        obs = obs.permute(1, 0, 2, 3, 4)
                         picker_state = torch.from_numpy(np.stack(picker_state_rnn)).to(device)
                     else:
                         picker_state = torch.tensor(picker_state).to(device)
@@ -363,7 +357,7 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
                         action, rnn_hidden_state = bc_rnn_model_0_finetune_pretrained.forward(obs, picker_state, rnn_hidden_state)
                         action = action[0].squeeze(0).cpu().detach().numpy()
                     elif bet:
-                        action = bet_model(obs, picker_state)
+                        action = bet_model(obs, picker_state).squeeze(0)
                         action = action.cpu().detach().numpy()
                     obs, reward, done, info = env.step(action)
                     picker_state = utils.get_picker_state(env)
@@ -574,8 +568,8 @@ def main(args):
     agent = None
 
     # utils.create_demonstration(env, video_dir, args.num_demonstrations, img_size=128)
-    utils.create_play_data(env, video_dir, args.num_demonstrations, img_size=128)
-    exit()
+    # utils.create_play_data(env, video_dir, args.num_demonstrations, img_size=128)
+    # exit()
 
 
     # for i in all_expert_data_planner:
