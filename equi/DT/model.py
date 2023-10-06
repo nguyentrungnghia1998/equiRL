@@ -14,8 +14,4 @@ class TrajectoryModel(nn.Module):
 
     def forward(self, states, actions, rewards, masks=None, attention_mask=None):
         # "masked" tokens or unspecified inputs can be passed in as None
-        return None, None, None
-
-    def get_action(self, states, actions, rewards, **kwargs):
-        # these will come as tensors on the correct device
-        return torch.zeros_like(actions[-1])
+        return None

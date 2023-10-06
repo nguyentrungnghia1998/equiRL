@@ -21,7 +21,8 @@ import matplotlib.pyplot as plt
 
 import wandb
 import gc
-from equi.representation_learning import load_model, BC_model, RNN_MIMO_MLP, BeT_model
+from equi.representation_learning import load_model, BC_model, RNN_MIMO_MLP, BeT_model, IBC, IBC_model
+from equi.DT.decision_transformer import DecisionTransformer, Factorize_DT_Transformer
 from torchvision.models import resnet18
 import torch.nn as nn
 
@@ -227,61 +228,125 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
     all_ep_rewards = []
 
     def run_eval_loop(sample_stochastically=True):
-        repr_save = torch.load('/home/hnguyen/cloth_smoothing/equiRL/model/reprs.pt')
-        action_save = torch.load('/home/hnguyen/cloth_smoothing/equiRL/model/actions.pt')
-
-        model = resnet18(pretrained=False)
-        model.conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        load_model(model, '/home/hnguyen/cloth_smoothing/equiRL/model/pretrained_observation_model.pt')
-        model.fc = nn.Identity()
-        model = model.to(device)
-
-        bc_model_finetune_pretrained = BC_model(input_dim=514,
-                                                output_dim=8,
-                                                hidden_dim=256,
-                                                use_pretrained_0_train=False,
-                                                path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/model/pretrained_observation_model.pt')
-        # load_model(bc_model_finetune_pretrained, '/home/hnguyen/cloth_smoothing/equiRL/model/BC_0_finetune_pretrained.pt').to(device)
-        # load_model(bc_model_finetune_pretrained, '/home/hnguyen/cloth_smoothing/equiRL/model/BC.pt').to(device)
-
-        bc_rnn_model_0_finetune_pretrained = RNN_MIMO_MLP(output_dim=8,
-                                                      hidden_dim=256,
-                                                      rnn_input_dim=514,
-                                                      rnn_hidden_dim=1024,
-                                                      rnn_num_layers=2,
-                                                      rnn_type="LSTM",
-                                                      use_pretrained_0_train=False,
-                                                      path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/model/pretrained_observation_model.pt').to(device)
-        # load_model(bc_rnn_model_0_finetune_pretrained, '/home/hnguyen/cloth_smoothing/equiRL/model/BC_RNN.pt').to(device)
-        # load_model(bc_rnn_model_0_finetune_pretrained, '/home/hnguyen/cloth_smoothing/equiRL/model/BC_RNN_0_finetune_pretrained.pt').to(device)
-
-        bet_model = BeT_model(input_dim=514,
-                          act_dim=8,
-                          n_clusters=64,
-                          k_means_fit_steps=500,
-                          use_pretrained_0_train=True,
-                          path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/model/pretrained_observation_model.pt').to(device)
-        load_model(bet_model, '/home/hnguyen/cloth_smoothing/equiRL/model/BeT.pt').to(device)
-        # load_model(bet_model, '/home/hnguyen/cloth_smoothing/equiRL/model/BeT_0_finetune_pretrained.pt').to(device)
         start_time = time.time()
         prefix = 'stochastic_' if sample_stochastically else ''
         infos = []
         all_frames = []
+        normalized_performance_final = []
+        max_normalized_performance = []
         test_expert = False
         vinn = False
         bc = False
+        ibc = False
         bc_rnn = False
-        bet = True
-        if vinn:
+        bet = False
+        dt = False
+        fracdt = True
+        if test_expert:
+            name = 'expert'
+        elif vinn:
             name = 'vinn'
+            repr_save = torch.load('/home/hnguyen/cloth_smoothing/equiRL/models/reprs.pt')
+            action_save = torch.load('/home/hnguyen/cloth_smoothing/equiRL/models/actions.pt')
+            model = resnet18(pretrained=False)
+            model.conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
+            load_model(model, '/home/hnguyen/cloth_smoothing/equiRL/models/pretrained_observation_model.pt')
+            model.fc = nn.Identity()
+            model = model.to(device)
         elif bc:
             name = 'bc'
+            bc_model = BC_model(input_dim=514,
+                            output_dim=8,
+                            load_obs_pretrained=False,
+                            finetune_obs_pretrained=True,
+                            path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/models/pretrained_observation_model.pt',
+                            use_gmm=False).to(device)
+            load_model(bc_model,
+                       '/home/hnguyen/cloth_smoothing/equiRL/models/BC_aug_rot_finetune_obs_pretrained.pt'
+                       )
+            bc_model.eval()
+        elif ibc:
+            name = 'ibc'
+            ibc_model = IBC(input_dim=1024,
+                        act_dim=8,
+                        out_dim=1).to(device)
+            load_model(ibc_model,
+                       '/home/hnguyen/cloth_smoothing/equiRL/models/IBC_aug_rot_finetune_obs_pretrained.pt',
+                       )
+            ibc_learner = IBC_model(ibc_model, 
+                               256, 
+                               bounds=np.array([[-1, 1], [-1, 1], [-1, 1], [-1, 1], [-1, 1], [-1, 1], [-1, 1], [-1, 1]]).T,
+                               device=device)
+            
         elif bc_rnn:
             name = 'bc_rnn'
-        elif test_expert:
-            name = 'expert'
+            bc_rnn_model =  RNN_MIMO_MLP(output_dim=8,
+                                   load_obs_pretrained=False,
+                                   finetune_obs_pretrained=True,
+                                   path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/models/pretrained_observation_model.pt',
+                                   use_gmm=True).to(device)
+    
+            load_model(bc_rnn_model,
+                    '/home/hnguyen/cloth_smoothing/equiRL/models/BC_RNN_aug_rot_finetune_obs_pretrained_use_gmm.pt'
+                    )
+            bc_rnn_model.eval()
         elif bet:
             name = 'bet'
+            bet_model = BeT_model(input_dim=514,
+                          act_dim=8,
+                          k_means_fit_steps=500,
+                          load_obs_pretrained=False,
+                          finetune_obs_pretrained=True,
+                          path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/models/pretrained_observation_model.pt').to(device)
+            load_model(bet_model,
+                       '/home/hnguyen/cloth_smoothing/equiRL/models/BeT_aug_rot_finetune_obs_pretrained.pt'
+                       )
+            bet_model.eval()
+        elif dt:
+            name = 'dt'
+            dt_model = DecisionTransformer(
+            state_dim=514,
+            act_dim=8,
+            max_length=10,
+            max_ep_len=200,
+            hidden_size=1024,
+            n_layer=3,
+            n_head=4,
+            n_inner= 8*256,
+            activation_function='relu',
+            n_positions=1024,
+            resid_pdrop=0.1,
+            attn_pdrop=0.1,
+            load_obs_pretrained=False,
+            finetune_obs_pretrained=True,
+            path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/models/pretrained_observation_model.pt').to(device)
+            load_model(dt_model,
+                       '/home/hnguyen/cloth_smoothing/equiRL/models/DT_aug_rot_finetune_obs_pretrained.pt'
+                       )
+            dt_model.eval()
+        elif fracdt:
+            name = 'fracdt'
+            fracdt_model = Factorize_DT_Transformer(
+            state_dim=512,
+            act_dim=8,
+            max_length=10,
+            max_ep_len=200,
+            hidden_size=1024,
+            n_layer=3,
+            n_head=4,
+            n_inner= 8*256,
+            activation_function='relu',
+            n_positions=1024,
+            resid_pdrop=0.1,
+            attn_pdrop=0.1,
+            load_obs_pretrained=False,
+            finetune_obs_pretrained=True,
+            path_pretrained='/home/hnguyen/cloth_smoothing/equiRL/models/pretrained_observation_model.pt').to(device)
+            load_model(fracdt_model,
+                       '/home/hnguyen/cloth_smoothing/equiRL/models/FracDT_aug_rot_finetune_obs_pretrained.pt'
+                       )
+            fracdt_model.eval()
+
         plt.figure()
         for i in range(num_episodes):
             obs = env.reset(eval_flag=True)
@@ -292,6 +357,7 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
             frames = [env.get_image(128, 128)]
             rewards = []
             episode_step = 0
+            max_np = 0
             expert_data = []
             final_step = []
             if test_expert:
@@ -322,10 +388,19 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
                         picker_state = fling[2]
             else:
                 if bc_rnn:
-                    rnn_hidden_state = bc_rnn_model_0_finetune_pretrained.reset()
-                if bet:
-                    obs_rnn = deque(maxlen=5)
-                    picker_state_rnn = deque(maxlen=5)
+                    rnn_hidden_state = bc_rnn_model.reset()
+                if bet or dt or fracdt:
+                    obs_seq = deque(maxlen=10)
+                    picker_state_seq = deque(maxlen=10)
+                    obs_seq.append(obs.numpy())
+                    picker_state_seq.append(picker_state)
+                    if dt or fracdt:
+                        rtg_seq = deque(maxlen=10)
+                        timestep_seq = deque(maxlen=10)
+                        action_seq = deque(maxlen=10)
+                        rtg_seq.append(np.array([1.0]))
+                        timestep_seq.append(0)
+                        action_seq.append(np.ones(8))
                 while not done:
                     # center crop image
                     # if args.encoder_type == 'pixel':
@@ -335,32 +410,77 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
                     #         action = agent.sample_action(obs,picker_state)
                     #     else:
                     #         action = agent.select_action(obs,picker_state)
-                    obs = obs.to(dtype=torch.float32, device=device) / 255.0
-                    if bet:
-                        numpy_obs = obs.cpu().detach().numpy()
-                        obs_rnn.append(numpy_obs)
-                        picker_state_rnn.append(picker_state)
-                        obs = torch.from_numpy(np.stack(obs_rnn)).to(device)
-                        obs = obs.permute(1, 0, 2, 3, 4)
-                        picker_state = torch.from_numpy(np.stack(picker_state_rnn)).to(device)
-                    else:
-                        picker_state = torch.tensor(picker_state).to(device)
-                    picker_state = picker_state.unsqueeze(0)
-                    if vinn:
+                    if bet or dt or fracdt:
+                        obs_ = torch.from_numpy(np.stack(obs_seq)).to(dtype=torch.float32, device=device).permute(1, 0, 2, 3, 4) / 127.5 - 1
+                        picker_state_ = torch.from_numpy(np.stack(picker_state_seq)).to(dtype=torch.float32, device=device).unsqueeze(0)
+                        if bet:
+                            action = bet_model(obs_, picker_state_)
+                            action = action.squeeze(0).cpu().detach().numpy()
+                        elif dt or fracdt:
+                            rtg_ = torch.from_numpy(np.stack(rtg_seq)).to(dtype=torch.float32, device=device).unsqueeze(0)
+                            timestep_ = torch.from_numpy(np.stack(timestep_seq)).to(device).long().unsqueeze(0)
+                            action_ = torch.from_numpy(np.stack(action_seq)).to(dtype=torch.float32, device=device).unsqueeze(0)
+                            if dt:
+                                action = dt_model(obs_, picker_state_, action_, None, rtg_, timestep_)[0, -1]
+                                action = action.squeeze(0).cpu().detach().numpy()
+                                action_seq[-1] = action
+                            elif fracdt:
+                                action_pos_1 = fracdt_model(obs_, picker_state_, action_, None, rtg_, timestep_)[0][0, -1]
+                                action_pos_1 = action_pos_1.squeeze(0).cpu().detach().numpy()
+                                # print(f'action_pos_1: {action_pos_1}')
+                                action_seq[-1][:3] = action_pos_1
+                                action_ = torch.from_numpy(np.stack(action_seq)).to(dtype=torch.float32, device=device).unsqueeze(0)
+
+                                action_pp_1 = fracdt_model(obs_, picker_state_, action_, None, rtg_, timestep_)[1][0, -1]
+                                action_pp_1 = action_pp_1.squeeze(0).cpu().detach().numpy()
+                                # print(f'action_pp_1: {action_pp_1}')
+                                action_seq[-1][3] = np.sign(action_pp_1)
+                                action_ = torch.from_numpy(np.stack(action_seq)).to(dtype=torch.float32, device=device).unsqueeze(0)
+
+                                action_pos_2 = fracdt_model(obs_, picker_state_, action_, None, rtg_, timestep_)[2][0, -1]
+                                action_pos_2 = action_pos_2.squeeze(0).cpu().detach().numpy()
+                                # print(f'action_pos_2: {action_pos_2}')
+                                action_seq[-1][4:7] = action_pos_2
+                                action_ = torch.from_numpy(np.stack(action_seq)).to(dtype=torch.float32, device=device).unsqueeze(0)
+
+                                action_pp_2 = fracdt_model(obs_, picker_state_, action_, None, rtg_, timestep_)[3][0, -1]
+                                action_pp_2 = action_pp_2.squeeze(0).cpu().detach().numpy()
+                                # print(f'action_pp_2: {action_pp_2}')
+                                action_seq[-1][7] = np.sign(action_pp_2)
+                                action = action_seq[-1]
+                    elif vinn:
+                        obs = obs.to(dtype=torch.float32, device=device) / 127.5 - 1
+                        picker_state = torch.tensor(picker_state).unsqueeze(0).to(device)
                         repr = model(obs)
                         repr_cat = torch.cat([repr, picker_state], dim=1)
                         action = utils.predict_action(repr_cat, repr_save, action_save, k=5)
                     elif bc:
-                        action = bc_model_finetune_pretrained(obs, picker_state)
-                        action = action.cpu().squeeze(0).detach().numpy()
+                        obs = obs.to(dtype=torch.float32, device=device) / 127.5 - 1
+                        picker_state = torch.tensor(picker_state).unsqueeze(0).to(device)
+                        action = bc_model(obs, picker_state)
+                        # action = action.sample()
+                        action = action.squeeze(0).cpu().detach().numpy()
+                    elif ibc:
+                        obs = obs.to(dtype=torch.float32, device=device) / 127.5 - 1
+                        picker_state = torch.tensor(picker_state).unsqueeze(0).to(device)
+                        action = ibc_learner.stochastic_optimizer.infer(obs, picker_state, ibc_learner.model)
+                        action = action.squeeze(0).cpu().detach().numpy()
                     elif bc_rnn:
-                        action, rnn_hidden_state = bc_rnn_model_0_finetune_pretrained.forward(obs, picker_state, rnn_hidden_state)
+                        obs = obs.to(dtype=torch.float32, device=device) / 127.5 - 1
+                        picker_state = torch.tensor(picker_state).unsqueeze(0).to(device)
+                        action, rnn_hidden_state = bc_rnn_model.forward(obs, picker_state, rnn_hidden_state)
                         action = action[0].squeeze(0).cpu().detach().numpy()
-                    elif bet:
-                        action = bet_model(obs, picker_state).squeeze(0)
-                        action = action.cpu().detach().numpy()
                     obs, reward, done, info = env.step(action)
                     picker_state = utils.get_picker_state(env)
+                    if bet or dt or fracdt:
+                        obs_seq.append(obs.numpy())
+                        picker_state_seq.append(picker_state)
+                    if dt or fracdt:
+                        rtg_seq.append(np.array([1.0 - reward]))
+                        timestep_seq.append(episode_step+1)
+                        action_seq.append(np.ones(8))
+                    if max_np < info['normalized_performance'] and (picker_state == 0).all():
+                        max_np = info['normalized_performance']
                     episode_step += 1
                     episode_reward += reward
                     ep_info.append(info)
@@ -368,9 +488,13 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
                     rewards.append(reward)
                     if episode_step == env.horizon:
                         done = True
+                if len(frames) <= env.horizon + 1:
+                    for _ in range(env.horizon + 1 - len(frames)):
+                        frames.append(env.get_image(128, 128))
                 plt.plot(range(len(rewards)), rewards)
+                max_normalized_performance.append(max_np)
+                normalized_performance_final.append(ep_info[-1]['normalized_performance'])
             if len(all_frames) < 10:
-                print(len(frames))
                 print(ep_info[-1])
                 all_frames.append(frames)
             infos.append(ep_info)
@@ -386,11 +510,16 @@ def evaluate(env, agent, video_dir, num_episodes, L, step, args, device):
         all_frames = np.array([make_grid(np.array(frame), nrow=2, padding=3) for frame in all_frames])
         save_numpy_as_gif(all_frames, os.path.join(video_dir, f'%d_{name}.gif' % step))
 
-        for key, val in get_info_stats(infos).items():
-            L.log('eval/info_' + prefix + key, val, step)
-            print(key, val)
-            if args.wandb:
-                wandb.log({key:val},step = step)
+        print(f'eval_{name}_mean_normalized_performance_final: {np.mean(normalized_performance_final)}')
+        print(f'eval_{name}_max_normalized_performance: {max_normalized_performance}')
+        print(f'eval_{name}_mean_normalized_performance: {np.mean(max_normalized_performance)}')
+        
+
+        # for key, val in get_info_stats(infos).items():
+        #     L.log('eval/info_' + prefix + key, val, step)
+        #     print(key, val)
+        #     if args.wandb:
+        #         wandb.log({key:val},step = step)
 
         # L.log('eval/' + prefix + 'eval_time', time.time() - start_time, step)
         # mean_ep_reward = np.mean(all_ep_rewards)
@@ -566,8 +695,9 @@ def main(args):
     #     device=device
     # )
     agent = None
-
+    # start_time = time.time()
     # utils.create_demonstration(env, video_dir, args.num_demonstrations, img_size=128)
+    # print(f'create_demonstration: {time.time() - start_time}')
     # utils.create_play_data(env, video_dir, args.num_demonstrations, img_size=128)
     # exit()
 

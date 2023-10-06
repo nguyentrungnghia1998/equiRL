@@ -5,7 +5,7 @@ from functools import wraps
 import torch
 from torch import nn
 import torch.nn.functional as F
-
+from torch.autograd import Variable
 from torchvision import transforms as T
 
 # helper functions
@@ -178,7 +178,7 @@ class BYOL(nn.Module):
         augment_fn = None,
         augment_fn2 = None,
         moving_average_decay = 0.99,
-        use_momentum = True
+        use_momentum = True,
     ):
         super().__init__()
         self.net = net
@@ -208,13 +208,14 @@ class BYOL(nn.Module):
             RandomChangeBackgroundRGBD(p=0.5),
             RandomColorJitterRGBD(p=0.5),
             RandomGrayScaleRGBD(p=0.3),
+            RandomApply(T.GaussianBlur((3, 3), (1.0, 2.0)), p=0.2),
         ])
         self.augment2 = T.Compose([
             RandomChangeBackgroundRGBD(p=0.5),
             RandomColorJitterRGBD(p=0.5),
             RandomGrayScaleRGBD(p=0.3),
+            RandomApply(T.GaussianBlur((3, 3), (1.0, 2.0)), p=0.2),
         ])
-
         self.online_encoder = NetWrapper(net, projection_size, projection_hidden_size, layer=hidden_layer, use_simsiam_mlp=not use_momentum)
 
         self.use_momentum = use_momentum
@@ -228,7 +229,7 @@ class BYOL(nn.Module):
         self.to(device)
 
         # send a mock image tensor to instantiate singleton parameters
-        self.forward(torch.randint(0, 255, (2, 4, image_size, image_size), device=device))
+        # self.forward(torch.randint(0, 255, (2, 4, image_size, image_size), device=device))
 
     @singleton('target_encoder')
     def _get_target_encoder(self):
@@ -256,11 +257,11 @@ class BYOL(nn.Module):
         if return_embedding:
             return self.online_encoder(x, return_projection = return_projection)
         image_one, image_two = self.augment1(x), self.augment2(x)
-        image_one = image_one.to(torch.float32) / 255.
-        image_two = image_two.to(torch.float32) / 255.
+        image_one = image_one.to(torch.float32) / 127.5 - 1
+        image_two = image_two.to(torch.float32) / 127.5 - 1
 
-        online_proj_one, _ = self.online_encoder(image_one)
-        online_proj_two, _ = self.online_encoder(image_two)
+        online_proj_one, representation_one = self.online_encoder(image_one)
+        online_proj_two, representation_two = self.online_encoder(image_two)
 
         online_pred_one = self.online_predictor(online_proj_one)
         online_pred_two = self.online_predictor(online_proj_two)
@@ -274,9 +275,9 @@ class BYOL(nn.Module):
 
         loss_one = loss_fn(online_pred_one, target_proj_two.detach())
         loss_two = loss_fn(online_pred_two, target_proj_one.detach())
-
         loss = loss_one + loss_two
-        return loss.mean()
+        final_loss = loss.mean()
+        return final_loss
     
 # class Augmentation RGBD images
 class RandomGrayScaleRGBD(object):
@@ -320,3 +321,39 @@ class RandomChangeBackgroundRGBD(object):
                 img_rgb_masked[:, i, :, :][mask] = int(random_color[i] * 255)
             img = torch.cat([img_rgb_masked, img_depth], dim=1)
         return img
+    
+class TCN(object):
+    "Time-constrastive network"
+    def __init__(self):
+        self.reg_lambda = 0.002
+
+    def npairs_loss(self, embeddings_anchor, embeddings_positive, step):
+        "Returns n-pairs loss for a single sequence"
+        reg_anchor = torch.mean(torch.sum(torch.square(embeddings_anchor), dim=1))
+        reg_positive = torch.mean(torch.sum(torch.square(embeddings_positive), dim=1))
+        l2loss = 0.25 * self.reg_lambda * (reg_anchor + reg_positive)
+        
+        # normalize embeddings_anchor and embeddings_positive
+        # embeddings_anchor = embeddings_anchor / torch.norm(embeddings_anchor, dim=1, keepdim=True)
+        # embeddings_positive = embeddings_positive / torch.norm(embeddings_positive, dim=1, keepdim=True)
+        # get per pair         
+        similarity_matrix = torch.matmul(embeddings_anchor, embeddings_positive.transpose(0, 1))
+
+        step = Variable(step, requires_grad=False)
+        step = step.float()
+        weight = torch.exp(-torch.abs(step.view(-1, 1) - step))
+        weight_sum_row = torch.sum(weight, dim=1)
+        weight /= weight_sum_row.view(-1, 1)
+        weight = weight.detach()
+
+        ms = torch.sum(torch.exp(similarity_matrix), dim=1)
+        xent_loss = -torch.log(torch.exp(similarity_matrix) / ms.view(-1, 1)) * weight
+        xent_loss = torch.mean(torch.sum(xent_loss, dim=1))
+        return xent_loss + l2loss
+        
+    def compute_loss(self, embeddings_anchor, embeddings_positive, steps):
+        "Returns n-pairs loss for a batch of sequences"
+        batch_loss = []
+        for i in range(embeddings_anchor.shape[0]):
+            batch_loss.append(self.npairs_loss(embeddings_anchor[i], embeddings_positive[i], steps[i]))
+        return torch.mean(torch.stack(batch_loss, dim=0))

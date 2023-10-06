@@ -59,7 +59,7 @@ DEFAULT_CONFIG = {
     'wandb': False,
     'wandb_seed': 15,
     # expert
-    'num_demonstrations': 20,
+    'num_demonstrations': 2000,
     # prioritized replay
     'prioritized_replay': False,
     'prioritized_replay_alpha': 0.6,

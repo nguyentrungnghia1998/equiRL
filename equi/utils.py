@@ -12,15 +12,13 @@ import time
 from skimage.util.shape import view_as_windows
 from collections import deque
 from scipy.ndimage import affine_transform
-# from equi.default_config import DEFAULT_CONFIG
-# from equi.segment_tree import SumSegmentTree, MinSegmentTree
+from equi.default_config import DEFAULT_CONFIG
+from equi.segment_tree import SumSegmentTree, MinSegmentTree
 from matplotlib import pyplot as plt
 from PIL import Image
 from scipy.spatial import ConvexHull
-# from softgym.utils.visualization import save_numpy_as_gif, make_grid
-import cv2
+from softgym.utils.visualization import save_numpy_as_gif, make_grid
 import pandas as pd
-
 
 
 class ConvergenceChecker(object):
@@ -697,7 +695,7 @@ def choose_random_particle_from_boundary(env):
             while True:
                 _id_2 = random.sample(bound_id, 1)
                 count_single_id += 1
-                if _id_1 != _id_2 and abs(particle_pos[_id_1, 0] - particle_pos[_id_2, 0]) >=  4 * env.action_tool.picker_radius:
+                if _id_1 != _id_2 and abs(particle_pos[_id_1, 0] - particle_pos[_id_2, 0]) >=  8 * env.action_tool.picker_radius:
                     choosen_id = np.array([_id_1[0], _id_2[0]])
                     break
                 if count_single_id > 20:
@@ -707,7 +705,7 @@ def choose_random_particle_from_boundary(env):
             while True:
                 choosen_id = random.sample(bound_id, 2)
                 count_choose_id += 1
-                if abs(particle_pos[choosen_id[0], 0] - particle_pos[choosen_id[1], 0]) >=  4 * env.action_tool.picker_radius:
+                if abs(particle_pos[choosen_id[0], 0] - particle_pos[choosen_id[1], 0]) >=  8 * env.action_tool.picker_radius:
                     break
                 if count_choose_id > 20:
                     return None
@@ -729,38 +727,51 @@ def pick_choosen_point(env,
                        img_size=128,
                        max_step=20):
     count_pick_bound = 0
-    while True:
+    picker_pos, particle_pos = env.action_tool._get_pos()
+    picker_pos_left = picker_pos[0].copy()
+    picker_pos_right = picker_pos[1].copy()    
+    target_pos_stage_1 = particle_pos[choosen_id, :3]
+    target_pos_left = target_pos_stage_1[0].copy()
+    target_pos_right = target_pos_stage_1[1].copy()
+    target_pos_left[1] += 0.1
+    target_pos_right[1] += 0.1
+    dis_left = target_pos_left - picker_pos_left
+    dis_right = target_pos_right - picker_pos_right
+    time_left = int(np.linalg.norm(dis_left) / 0.08) + 1
+    time_right = int(np.linalg.norm(dis_right) / 0.08) + 1
+    action_left = (dis_left / time_left) / 0.08
+    action_right = (dis_right / time_right) / 0.08
+    left_done = False
+    right_done = False
+    for i in range(max_step):
         picker_pos, particle_pos = env.action_tool._get_pos()
-        target_pos = particle_pos[choosen_id, :3]
-        target_pos[:, 1] += 0.08
-        dis = target_pos - picker_pos
-        norm = np.linalg.norm(dis, axis=1)
-        action = np.clip(dis, -0.08, 0.08) / 0.08
-        action = np.concatenate([action, -1 * np.ones((2, 1))], axis=1).reshape(-1)
-        next_obs, reward, done, info = env.step(action)
-        next_picker_state = get_picker_state(env)
-        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
-        frames.append(env.get_image(img_size, img_size))
-        ep_info.append(info)
-        episode_step += 1
-        count_pick_bound += 1
-        obs = next_obs
-        picker_state = next_picker_state
-        if episode_step == env.horizon or count_pick_bound >= max_step:
-            return None
-        if (norm < thresh).all():
-            break
-    
-    while True:
-        picker_pos, particle_pos = env.action_tool._get_pos()
-        target_pos = particle_pos[choosen_id, :3]
-        dis = target_pos - picker_pos
-        norm = np.linalg.norm(dis, axis=1)
-        action = np.clip(dis, -0.08, 0.08) / 0.08
-        if (norm < thresh).all():
-            action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
+        if i < time_left:
+            action_l = np.concatenate([action_left, -1 * np.ones((1))])
         else:
-            action = np.concatenate([action, -1 * np.ones((2, 1))], axis=1).reshape(-1)
+            target_pos_left = particle_pos[choosen_id, :3][0].copy()
+            current_pos_left = picker_pos[0].copy()
+            dist_left = target_pos_left - current_pos_left
+            if left_done:
+                action_l = np.array([0, 0, 0, 1])
+            elif np.linalg.norm(dist_left) < thresh:
+                action_l = np.concatenate([np.clip(dist_left, -0.08, 0.08) / 0.08, np.ones((1))])
+                left_done = True
+            else:
+                action_l = np.concatenate([np.clip(dist_left, -0.08, 0.08) / 0.08, -1 * np.ones((1))])
+        if i < time_right:
+            action_r = np.concatenate([action_right, -1 * np.ones((1))])
+        else:
+            target_pos_right = particle_pos[choosen_id, :3][1].copy()
+            current_pos_right = picker_pos[1].copy()
+            dist_right = target_pos_right - current_pos_right
+            if right_done:
+                action_r = np.array([0, 0, 0, 1])
+            elif np.linalg.norm(dist_right) < thresh:
+                action_r = np.concatenate([np.clip(dist_right, -0.08, 0.08) / 0.08, np.ones((1))])
+                right_done = True
+            else:
+                action_r = np.concatenate([np.clip(dist_right, -0.08, 0.08) / 0.08, -1 * np.ones((1))])
+        action = np.concatenate([action_l, action_r], axis=-1)
         next_obs, reward, done, info = env.step(action)
         next_picker_state = get_picker_state(env)
         expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
@@ -770,11 +781,55 @@ def pick_choosen_point(env,
         count_pick_bound += 1
         obs = next_obs
         picker_state = next_picker_state
-        if episode_step == env.horizon or count_pick_bound >= max_step:
+        if episode_step > env.horizon:
             return None
         if np.all(picker_state == 1) and len(set(particle_pos[env.action_tool.picked_particles, 3])) == 1:
             final_step.append(episode_step)
             return [episode_step, obs, picker_state]
+    return None
+
+def move_fastest_to_the_current_position(current_pos,
+                                         target_pos,
+                                         env,
+                                         obs,
+                                         picker_state,
+                                         episode_step,
+                                         frames,
+                                         expert_data,
+                                         ep_info,
+                                         img_size=128,
+                                         speed=0.08):
+    curr_pos_left = current_pos[0].copy()
+    curr_pos_right = current_pos[1].copy()
+    target_pos_left = target_pos[0]
+    target_pos_right = target_pos[1]
+    dis_left = target_pos_left - curr_pos_left
+    dis_right = target_pos_right - curr_pos_right
+    time_left = int(np.linalg.norm(dis_left) / speed) + 1
+    time_right = int(np.linalg.norm(dis_right) / speed) + 1
+    action_left = (dis_left / time_left) / 0.08
+    action_right = (dis_right / time_right) / 0.08
+    for i in range(max(time_left, time_right)):
+        if i < time_left:
+            action_l = np.concatenate([action_left, np.ones((1))])
+        else:
+            action_l = np.array([0, 0, 0, 1])
+        if i < time_right:
+            action_r = np.concatenate([action_right, np.ones((1))])
+        else:
+            action_r = np.array([0, 0, 0, 1])
+        action = np.concatenate([action_l, action_r], axis=-1)
+        next_obs, reward, done, info = env.step(action)
+        next_picker_state = get_picker_state(env)
+        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
+        frames.append(env.get_image(img_size, img_size))
+        ep_info.append(info)
+        episode_step += 1
+        obs = next_obs
+        picker_state = next_picker_state
+        if episode_step > env.horizon:
+            return None
+    return [episode_step, obs, picker_state]
 
 def fling_primitive_1(env, 
                      obs, 
@@ -792,26 +847,12 @@ def fling_primitive_1(env,
     curr_pos = env.action_tool._get_pos()[0]
     dist = abs(curr_pos[0, 0] - curr_pos[1, 0])
     target_pos = np.array([[-dist/2-0.1, 0.3, -0.1], [dist/2+0.1, 0.3, -0.1]])
-    count_move_height = 0
-    while True:
-        picker_pos = env.action_tool._get_pos()[0]
-        dis = target_pos - picker_pos
-        norm = np.linalg.norm(dis, axis=1)
-        action = np.clip(dis, -0.08, 0.08) / 0.08
-        action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
-        next_obs, reward, done, info = env.step(action)
-        next_picker_state = get_picker_state(env)
-        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
-        frames.append(env.get_image(img_size, img_size))
-        ep_info.append(info)
-        episode_step += 1
-        count_move_height += 1
-        obs = next_obs
-        picker_state = next_picker_state
-        if episode_step == env.horizon:
-            return None
-        if (norm < thresh).all() or count_move_height >= max_step // 2:
-            break
+    fling_0_3 = move_fastest_to_the_current_position(curr_pos, target_pos, env, obs, picker_state, episode_step, frames, expert_data, ep_info, img_size)
+    if fling_0_3 is None:
+        return None
+    episode_step = fling_0_3[0]
+    obs = fling_0_3[1]
+    picker_state = fling_0_3[2]
 
     # second, stretch the cloth
     init_pos = env._get_flat_pos()
@@ -819,19 +860,6 @@ def fling_primitive_1(env,
     curr_pos, particle_pos = env.action_tool._get_pos()
     curr_dis = np.linalg.norm(particle_pos[choosen_id[0], [0, 2]] - particle_pos[choosen_id[1], [0, 2]])
     denta = (init_dis-curr_dis) / 2
-    # if curr_pos[0, 0] > curr_pos[1, 0]:
-    #     left = 1
-    #     right = 0
-    # else:
-    #     left = 0
-    #     right = 1
-    # cos_phi = (curr_pos[right, 0] - curr_pos[left, 0]) / curr_dis
-    # sin_phi = (curr_pos[right, 2] - curr_pos[left, 2]) / curr_dis
-    # target_pos = copy.deepcopy(curr_pos)
-    # target_pos[left, 0] = curr_pos[left, 0] - denta * cos_phi
-    # target_pos[left, 2] = curr_pos[left, 2] - denta * sin_phi
-    # target_pos[right, 0] = curr_pos[right, 0] + denta * cos_phi
-    # target_pos[right, 2] = curr_pos[right, 2] + denta * sin_phi
     target_pos = copy.deepcopy(curr_pos)
     m = curr_pos[1, 0] - curr_pos[0, 0]
     n = curr_pos[1, 2] - curr_pos[0, 2]
@@ -839,30 +867,16 @@ def fling_primitive_1(env,
     target_pos[0, 2] = curr_pos[0, 2] - (n * denta * curr_dis) / (m*m + n*n)
     target_pos[1, 0] = curr_pos[1, 0] + (m * denta * curr_dis) / (m*m + n*n)
     target_pos[1, 2] = curr_pos[1, 2] + (n * denta * curr_dis) / (m*m + n*n)
-    count = 0
-    while True:
-        picker_pos = env.action_tool._get_pos()[0]
-        dis = target_pos - picker_pos
-        norm = np.linalg.norm(dis, axis=1)
-        action = np.clip(dis, -0.08, 0.08) / 0.08
-        action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
-        next_obs, reward, done, info = env.step(action)
-        next_picker_state = get_picker_state(env)
-        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
-        frames.append(env.get_image(img_size, img_size))
-        ep_info.append(info)
-        episode_step += 1
-        count += 1
-        obs = next_obs
-        picker_state = next_picker_state
-        if episode_step == env.horizon or count >= max_step // 2:
-            return None
-        if (norm < thresh).all():
-            break
+    stretch = move_fastest_to_the_current_position(curr_pos, target_pos, env, obs, picker_state, episode_step, frames, expert_data, ep_info, img_size)
+    if stretch is None:
+        return None
+    episode_step = stretch[0]
+    obs = stretch[1]
+    picker_state = stretch[2]
 
     # third, lift until one particle on the ground
     for _ in range(max_step):
-        action = np.array([0.0, 1.0, 0.0, 1, 0.0, 1.0, 0.0, 1])
+        action = np.array([0.0, 0.5, 0.0, 1, 0.0, 0.5, 0.0, 1])
         next_obs, reward, done, info = env.step(action)
         next_picker_state = get_picker_state(env)
         expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
@@ -871,20 +885,18 @@ def fling_primitive_1(env,
         episode_step += 1
         obs = next_obs
         picker_state = next_picker_state
-        if episode_step == env.horizon:
+        if episode_step > env.horizon:
             return None
-        if (env.action_tool._get_pos()[1][:, 1] >= 2*env.cloth_particle_radius).all() or (_ + 1) >= max_step // 2:
+        if (env.action_tool._get_pos()[1][:, 1] >= 2*env.cloth_particle_radius).all():
             break
     final_step.append(episode_step)
 
-    # last, fling the cloth towards
-    current_pos = env.action_tool._get_pos()[0]
-    fling_height = current_pos[0, 1]
+    # then, fling the cloth towards
+    fling_height = env.action_tool._get_pos()[0][0, 1]
     count_loop = round(fling_height / 0.1)
-    for _ in range(count_loop):
-        z = 0.05 * count_loop
+    for _ in range(count_loop-1):
         y = (0.01 * count_loop) / 0.08
-        action = np.array([0.0, z, y, 1, 0.0, z, y, 1])
+        action = np.array([0.0, 0.0, y, 1, 0.0, 0.0, y, 1])
         next_obs, reward, done, info = env.step(action)
         next_picker_state = get_picker_state(env)
         expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
@@ -893,43 +905,24 @@ def fling_primitive_1(env,
         episode_step += 1
         obs = next_obs
         picker_state = next_picker_state
-        if episode_step == env.horizon:
+        if episode_step > env.horizon:
             return None
-
+        
     # next, move back the cloth to the ground
     curr_pos = env.action_tool._get_pos()[0]
     target_pos = copy.deepcopy(curr_pos)
-    target_pos[:, 1] = 0.035
-    target_pos[:, 2] = -0.06 * count_loop
-    while True:
-        picker_pos = env.action_tool._get_pos()[0]
-        dis = target_pos - picker_pos
-        norm = np.linalg.norm(dis, axis=1)
-        action = np.clip(dis, -0.01 * count_loop, 0.01 * count_loop) / 0.08
-        action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
-        next_obs, reward, done, info = env.step(action)
-        next_picker_state = get_picker_state(env)
-        expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
-        frames.append(env.get_image(img_size, img_size))
-        ep_info.append(info)
-        episode_step += 1
-        obs = next_obs
-        picker_state = next_picker_state
-        if episode_step == env.horizon:
-            return None
-        if (norm < thresh).all():
-            break
+    target_pos[:, 1] = thresh
+    target_pos[:, 2] = -0.05 * count_loop
+    move_back = move_fastest_to_the_current_position(curr_pos, target_pos, env, obs, picker_state, episode_step, frames, expert_data, ep_info, img_size, count_loop*0.01)
+    if move_back is None:
+        return None
+    episode_step = move_back[0]
+    obs = move_back[1]
+    picker_state = move_back[2]
 
     # last, slowly move the cloth to the ground
-    curr_pos = env.action_tool._get_pos()[0]
-    target_pos = copy.deepcopy(curr_pos)
-    target_pos[:, 2] -= 1.5
-    for _ in range(count_loop):
-        picker_pos = env.action_tool._get_pos()[0]
-        dis = target_pos - picker_pos
-        norm = np.linalg.norm(dis, axis=1)
-        action = np.clip(dis, -0.04, 0.04) / 0.08
-        action = np.concatenate([action, np.ones((2, 1))], axis=1).reshape(-1)
+    for _ in range(4):
+        action = np.array([0.0, 0.0, -count_loop/8, 1, 0.0, 0.0, -count_loop/8, 1])
         next_obs, reward, done, info = env.step(action)
         expert_data.append([obs, action, reward, next_obs, float(done), picker_state, next_picker_state])
         frames.append(env.get_image(img_size, img_size))
@@ -937,9 +930,9 @@ def fling_primitive_1(env,
         episode_step += 1
         obs = next_obs
         picker_state = next_picker_state
-        if episode_step == env.horizon:
+        if episode_step > env.horizon:
             return None
-
+        
     # set the grasp is False
     action = np.array([-1.0, 1.0, 0.0, -1, 1.0, 1.0, 0.0, -1])
     next_obs, reward, done, info = env.step(action)
@@ -950,14 +943,14 @@ def fling_primitive_1(env,
     episode_step += 1
     obs = next_obs
     picker_state = next_picker_state
+    if episode_step > env.horizon:
+        return None
     if done:
         final_step.append(episode_step)
         return 1
-    if episode_step == env.horizon:
-        return None
-
-    # wait 1 steps for the cloth to be stable
-    for _ in range(1):
+    
+    # wait 3 steps for the cloth to be stable
+    for _ in range(3):
         action = np.array([0, 0, 0, -1, 0, 0, 0, -1])
         next_obs, reward, done, info = env.step(action)
         next_picker_state = get_picker_state(env)
@@ -967,14 +960,11 @@ def fling_primitive_1(env,
         episode_step += 1
         obs = next_obs
         picker_state = next_picker_state
+        if episode_step > env.horizon:
+            return None
         if done:
             final_step.append(episode_step)
             return 1
-        if episode_step == env.horizon:
-            return None
-    # if ep_info[-1]['normalized_performance'] >= 0.6:
-    #     final_step.append(episode_step)
-    #     return 1
     final_step.append(episode_step)
     return [episode_step, obs, picker_state]
 
@@ -1460,7 +1450,6 @@ def fling_demonstrations(env,
         picker_state = fling[2]
         return episode_step, obs, picker_state
 
-
 def create_demonstration(env,
                          video_dir,
                          num_demonstrations,
@@ -1492,6 +1481,7 @@ def create_demonstration(env,
         expert_data = []
         episode_step = 0
         final_step = []
+        curr_normalized_performance = 0
         for m in range (max_fling_times):
             # fling demonstrations
             fling = fling_demonstrations(env,
@@ -1516,7 +1506,7 @@ def create_demonstration(env,
                 expert_data_path = os.path.join(demo_npy, f'data_{count_expert_planner}.npy')
                 np.save(expert_data_path, expert_data)
                 Demo_NPY.append(os.path.abspath(expert_data_path))
-                if len(frames) != env.horizon + 1:
+                if len(frames) < env.horizon + 1:
                     for _ in range(env.horizon + 1 - len(frames)):
                         frames.append(env.get_image(img_size, img_size))
                 assert len(frames) == env.horizon + 1
@@ -1525,6 +1515,9 @@ def create_demonstration(env,
                 print('[INFO]Collected {} fling demonstrations in {} steps with {} times fling'.format(count_expert_planner, len(expert_data), m+1))
                 break
             else:
+                if curr_normalized_performance >= ep_info[-1]['normalized_performance']:
+                    break
+                curr_normalized_performance = ep_info[-1]['normalized_performance']
                 episode_step = fling[0]
                 obs = fling[1]
                 picker_state = fling[2]
@@ -1676,7 +1669,6 @@ def predict_goal(x, embs_concat, goals_concat, k=5):
     nn_dist = dists[nn_ids]
     nn_dist = torch.exp(-nn_dist)
     nn_dist = nn_dist / torch.sum(nn_dist)
-
     goal = torch.zeros_like(nn_goals[0])
     for i in range(k):
         goal += nn_dist[i] * nn_goals[i]
